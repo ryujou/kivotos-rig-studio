@@ -27,6 +27,8 @@ export const messages = {
   importBorrow: localized('导入家具包 / 借用道具', '家具パック読込 / 小物の借用', '가구 팩 가져오기 / 소품 빌리기', 'Import furniture / borrow props'),
   donor: localized('借用 C', '提供元 C', '제공자 C', 'Donor C'),
   gripOffset: localized('武器握持与偏移', '武器の握り方と位置', '무기 그립 및 오프셋', 'Weapon grip & offset'),
+  armSpread: localized('手臂外扩', '腕の開き補正', '팔 벌림 보정', 'Arm clearance'),
+  wind: localized('微风强度', '風の強さ', '바람 세기', 'Breeze'),
   hairPhysics: localized('发裙物理', '髪・スカートの物理', '머리카락·치마 물리', 'Hair/skirt physics'),
   rootTuning: localized('根位置偏移与物理参数', 'ルート位置と物理の調整', '루트 오프셋 및 물리 조정', 'Root offset & physics tuning'),
   mappingSkeleton: localized('自定义骨骼映射与骨架', 'ボーン割当と骨格表示', '사용자 뼈 매핑 및 스켈레톤', 'Custom bone mapping & skeleton'),

@@ -128,16 +128,18 @@ export function Tabs<K extends MessageKey>({
 export function Toggle({
   label,
   checked,
+  disabled,
   title,
   onChange,
 }: {
   label: string
   checked: boolean
+  disabled?: boolean
   title?: string
   onChange: () => void
 }) {
   return (
-    <button className="toggle-row" title={title} role="switch" aria-checked={checked} onClick={onChange}>
+    <button className="toggle-row" title={title} role="switch" disabled={disabled} aria-checked={checked} onClick={onChange}>
       <span>{label}</span>
       <span className="switch" aria-hidden="true" />
     </button>

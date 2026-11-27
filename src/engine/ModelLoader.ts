@@ -19,9 +19,9 @@ import {
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { fetchModelBuffer, type Progress } from '../services/modelCache'
 import { propModels } from '../data/propModels'
-import { isBakedOutline, OutlineEffect } from './OutlineEffect'
+import { ensureClothOffsetAttribute, isBakedOutline, OutlineEffect } from './OutlineEffect'
 
-import { canonicalBoneName } from './RigDefinition'
+import { canonicalBoneName, weaponKey } from './RigDefinition'
 import { describeClip, type ClipInfo } from './AnimationUtils'
 export type { ClipCategory, ClipInfo } from './AnimationUtils'
 
@@ -134,6 +134,33 @@ function studioLambert(source: MeshBasicMaterial, face: boolean, slate: boolean)
   return mat
 }
 
+interface MaterialVariants {
+  unlit: MeshBasicMaterial
+  wireframe: MeshBasicMaterial
+  clay?: MeshLambertMaterial
+  face?: MeshLambertMaterial
+  body?: MeshLambertMaterial
+  slate?: MeshLambertMaterial
+}
+
+const clothShaders = new WeakSet<Material>()
+function enableClothOffset(mat: Material) {
+  if (clothShaders.has(mat)) return mat
+  clothShaders.add(mat)
+  const compile = mat.onBeforeCompile
+  const cacheKey = mat.customProgramCacheKey() + '/clothOffset'
+  mat.customProgramCacheKey = () => cacheKey
+  mat.onBeforeCompile = (shader, renderer) => {
+    compile.call(mat, shader, renderer)
+    if (shader.vertexShader) {
+      shader.vertexShader = 'attribute vec3 clothOffset;\n' + shader.vertexShader.replace(
+        '#include <skinning_vertex>', '#include <skinning_vertex>\ntransformed += clothOffset;',
+      )
+    }
+  }
+  return mat
+}
+
 export class StudioModel {
   readonly bodyMeshes: Mesh[] = []
   readonly mouthMeshes: Mesh[] = []
@@ -148,6 +175,7 @@ export class StudioModel {
   private readonly collapseMeshes = new Set<Mesh>()
   private readonly disabledParts = new Set<Mesh>()
   private weaponsCollapsed = false
+  private readonly individuallyCollapsed = new Set<Mesh>()
   private readonly initiallyHidden = new Set<Mesh>()
   private readonly clipVisibility = new Map<Mesh, boolean>()
   private visibilityClip?: AnimationClip
@@ -159,17 +187,9 @@ export class StudioModel {
   readonly clips: ClipInfo[]
   readonly outline: OutlineEffect
   private readonly originals = new Map<Mesh, Material | Material[]>()
-  private readonly variants = new Map<
-    Material,
-    {
-      unlit: MeshBasicMaterial
-      wireframe: MeshBasicMaterial
-      clay?: MeshLambertMaterial
-      face?: MeshLambertMaterial
-      body?: MeshLambertMaterial
-      slate?: MeshLambertMaterial
-    }
-  >()
+  private readonly variants = new Map<Material, MaterialVariants>()
+  private readonly clothVariants = new Map<Material, MaterialVariants>()
+
 
   constructor(
     readonly root: Object3D,
@@ -226,6 +246,7 @@ export class StudioModel {
         meshNames.get(mesh) ??
         (mesh.parent?.type === 'Group' && /_\d+$/.test(mesh.name) ? mesh.parent.name : mesh.name)
       this.meshGroups.set(mesh, group)
+      if (group) addPart(this.namedParts, partKey(group), mesh)
       const label = group
         .replace(/^CH\d+[_ ]*/i, '')
         .replace(/_Original_/i, ' ')
@@ -254,7 +275,7 @@ export class StudioModel {
         (!surveyedProps.has(name) &&
           !/bag|prop|instrument|tank|bike/i.test(name) &&
           mesh instanceof SkinnedMesh &&
-          mesh.skeleton.bones.some((b) => /^bip001[_ ]weapon$/i.test(b.name)))
+          mesh.skeleton.bones.some((b) => /^bip001[_ ]weapon(?:[_ ][rl])?$/i.test(b.name)))
       )
         this.weaponMeshes.push(mesh)
       else this.propMeshes.push(mesh)
@@ -281,20 +302,47 @@ export class StudioModel {
     this.expandVisibleBounds(this.bounds, this.haloNodes)
     if (this.bounds.isEmpty()) this.expandVisibleBounds(this.bounds)
     this.clips = animations.map(describeClip)
+    // A GLTF primitive can be instanced by a prop or another independently posed skin.
+    const uses = new Map<BufferGeometry, number>()
+    for (const mesh of this.meshGroups.keys()) {
+      uses.set(mesh.geometry, (uses.get(mesh.geometry) ?? 0) + 1)
+    }
+    for (const mesh of this.bodyMeshes) {
+      const owners = uses.get(mesh.geometry)!
+      if (owners > 1) {
+        uses.set(mesh.geometry, owners - 1)
+        mesh.geometry = mesh.geometry.clone()
+      }
+      ensureClothOffsetAttribute(mesh.geometry)
+    }
     this.outline = new OutlineEffect(root)
+  }
+
+  get activeVisibilityClip() {
+    return this.visibilityClip
+  }
+
+  // The hidden Motion B skeleton still drives contacts with its authored props.
+  switchVisible(mesh: Mesh) {
+    return (
+      (this.clipVisibility.get(mesh) ?? !this.initiallyHidden.has(mesh)) &&
+      !(this.collapseMeshes.has(mesh) && mesh.morphTargetInfluences![0] >= 0.95)
+    )
   }
 
   private updateVisibility(mesh: Mesh) {
     mesh.visible =
       !this.disabledParts.has(mesh) &&
+      !this.individuallyCollapsed.has(mesh) &&
       !(this.weaponsCollapsed && this.weaponMeshes.includes(mesh)) &&
-      (this.clipVisibility.get(mesh) ?? !this.initiallyHidden.has(mesh)) &&
-      !(this.collapseMeshes.has(mesh) && mesh.morphTargetInfluences![0] >= 0.95)
+      this.switchVisible(mesh)
   }
 
-  setWeaponsCollapsed(collapsed: boolean) {
-    if (this.weaponsCollapsed === collapsed) return
+  setWeaponsCollapsed(collapsed: boolean, parts?: ReadonlySet<Mesh>) {
+    if (this.weaponsCollapsed === collapsed && !this.individuallyCollapsed.size && !parts?.size) return
     this.weaponsCollapsed = collapsed
+    this.individuallyCollapsed.clear()
+    if (parts) for (const mesh of parts) this.individuallyCollapsed.add(mesh)
     for (const mesh of this.weaponMeshes) this.updateVisibility(mesh)
   }
 
@@ -312,6 +360,20 @@ export class StudioModel {
     for (const node of this.haloNodes) if (node instanceof Mesh) this.setPartEnabled(node, enabled)
   }
 
+  private switchParts(value: string) {
+    const key = partKey(value)
+    return this.namedParts.get(key) ?? this.taggedParts.get(key)
+  }
+
+  clipSelectsPart(clip: AnimationClip, mesh: Mesh) {
+    for (const rule of ['show', 'hide'] as const) {
+      const values = clip.userData?.[rule]
+      for (const value of Array.isArray(values) ? values : [values])
+        if (typeof value === 'string' && this.switchParts(value)?.has(mesh)) return true
+    }
+    return false
+  }
+
   syncSwitchVisibility(clip?: AnimationClip) {
     if (clip !== this.visibilityClip) {
       this.visibilityClip = clip
@@ -320,8 +382,7 @@ export class StudioModel {
         const values = clip?.userData?.[rule]
         for (const value of Array.isArray(values) ? values : [values]) {
           if (typeof value !== 'string') continue
-          const key = partKey(value)
-          const matches = this.namedParts.get(key) ?? this.taggedParts.get(key)
+          const matches = this.switchParts(value)
           if (matches) for (const mesh of matches) this.clipVisibility.set(mesh, rule === 'show')
         }
       }
@@ -349,8 +410,9 @@ export class StudioModel {
   }
 
   setShading(mode: Shading) {
-    const substitute = (material: Material, accessory: boolean, partName: string) => {
-      let pair = this.variants.get(material)
+    const substitute = (material: Material, accessory: boolean, partName: string, cloth: boolean) => {
+      const variants = cloth ? this.clothVariants : this.variants
+      let pair = variants.get(material)
       if (!pair) {
         const source = material as MeshBasicMaterial
         const unlit = new MeshBasicMaterial({
@@ -366,7 +428,7 @@ export class StudioModel {
           toneMapped: false,
         })
         pair = { unlit, wireframe: new MeshBasicMaterial({ wireframe: true, color: 0x4298bc }) }
-        this.variants.set(material, pair)
+        variants.set(material, pair)
       }
       if (mode === 'wireframe') return pair.wireframe
       const source = pair.unlit
@@ -407,9 +469,12 @@ export class StudioModel {
         this.mouthMeshes.includes(mesh) ? 'mouth' : '',
         isBakedOutline(mesh) ? 'outline' : '',
       ].join(' ')
-      mesh.material = Array.isArray(original)
-        ? original.map((material) => substitute(material, accessory, name))
-        : substitute(original, accessory, name)
+      const cloth = mesh.geometry.hasAttribute('clothOffset')
+      const variant = (material: Material) => {
+        const mat = substitute(material, accessory, name, cloth)
+        return cloth ? enableClothOffset(mat) : mat
+      }
+      mesh.material = Array.isArray(original) ? original.map(variant) : variant(original)
     }
   }
   dispose() {
@@ -435,7 +500,7 @@ export class StudioModel {
       tex.dispose()
     }
     for (const image of images) image.close()
-    for (const pair of this.variants.values()) {
+    for (const pair of [...this.variants.values(), ...this.clothVariants.values()]) {
       pair.unlit.dispose()
       pair.wireframe.dispose()
       pair.clay?.dispose()
@@ -481,7 +546,8 @@ export function rigBones(model: StudioModel) {
   const nodes: Object3D[] = []
   const ancestors = new Set<Object3D>()
   for (const node of model.rest.keys()) {
-    if (!(node instanceof Bone) && canonicalBoneName(node.name) !== 'bip001') continue
+    const key = canonicalBoneName(node.name)
+    if (!(node instanceof Bone) && key !== 'bip001' && !weaponKey.test(key)) continue
     let parent = node.parent
     while (parent && parent !== model.root && !ancestors.has(parent)) {
       ancestors.add(parent)
@@ -492,7 +558,11 @@ export function rigBones(model: StudioModel) {
   function visit(node: Object3D, belowHip: boolean) {
     if (!model.rest.has(node) || node instanceof Mesh) return
     const within = belowHip || canonicalBoneName(node.name) === 'bip001'
-    if (node.name && (within || node instanceof Bone || ancestors.has(node))) nodes.push(node)
+    if (
+      node.name &&
+      (within || node instanceof Bone || ancestors.has(node) || weaponKey.test(canonicalBoneName(node.name)))
+    )
+      nodes.push(node)
     for (const child of node.children) visit(child, within)
   }
   visit(model.root, false)

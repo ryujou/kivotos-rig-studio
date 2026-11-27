@@ -44,6 +44,9 @@ import { ModelLoader, StudioModel } from './ModelLoader'
 import { RetargetEngine } from './RetargetEngine'
 import { describeClip } from './AnimationUtils'
 import { SkeletonOverlay } from './SkeletonOverlay'
+import { buildFineClothMesh } from './ClothMeshBuilder'
+import { getWebGPU, onWebGPULost, type GpuDeviceLike } from './WebGPUContext'
+import { WebGPUClothSolver } from './WebGPUClothSolver'
 import { cropRect } from './exportSpec'
 
 interface StageSlot {
@@ -57,12 +60,17 @@ interface StageSlot {
   driver?: StudioModel
   externalClips: Slot['externalClips']
   engine?: RetargetEngine
+  gpuCloth?: WebGPUClothSolver | null
+  clothDt?: number
   overlay?: SkeletonOverlay
   props?: SlotProps
   lastSlot?: Slot
   lastWindow?: number
   lastEnd?: string
   lastRig?: Slot['rig']
+  lastWeapon?: Slot['weapon']
+  lastDisplay?: StudioModel | null
+  lastEmbedded?: Slot['embedded']
   lastTime?: number
   lastSeek?: number
   lastClip?: string
@@ -124,6 +132,10 @@ export class SceneManager {
   private readonly observer: ResizeObserver
   private restoreCapture?: () => void
   private capturing = false
+  private readonly gpuReady: Promise<void>
+  private device?: GpuDeviceLike
+  private stopWatchingGPU?: () => void
+  private captureRevision = 0
   private disposed = false
   private frameId = 0
   private previous = 0
@@ -190,7 +202,25 @@ export class SceneManager {
     this.observer = new ResizeObserver(() => this.resize())
     this.observer.observe(host)
     this.resize()
+    this.gpuReady = getWebGPU().then((state) => {
+      if (this.disposed) return
+      this.device = state.device
+      store.getState().setGpu({ status: state.status, label: state.label })
+      this.needsFrame = true
+      this.stopWatchingGPU = onWebGPULost(state, () => this.fallbackGPU())
+    })
     this.frameId = requestAnimationFrame(this.frame)
+  }
+
+  private fallbackGPU() {
+    if (!this.device || this.disposed) return
+    this.device = undefined
+    for (const entry of this.slots.values()) {
+      entry.gpuCloth?.dispose()
+      entry.gpuCloth = undefined
+    }
+    store.getState().setGpu({ status: 'fallback', label: '' })
+    this.needsFrame = true
   }
 
   private resize() {
@@ -297,6 +327,8 @@ export class SceneManager {
       entry.props?.restore()
       entry.overlay?.dispose()
       entry.overlay = undefined
+      entry.gpuCloth?.dispose()
+      entry.gpuCloth = undefined
       entry.engine!.dispose()
       if (entry.actor !== motion) entry.actor?.dispose()
       entry.actorSource = source
@@ -318,6 +350,7 @@ export class SceneManager {
     entry.pendingCast?.controller.abort()
     entry.overlay?.dispose()
     entry.props?.restore()
+    entry.gpuCloth?.dispose()
     entry.engine?.dispose()
     entry.actor?.dispose()
     entry.driver?.dispose()
@@ -529,7 +562,7 @@ export class SceneManager {
       }
       s.setTimeline({ time, playing: t.loop || time < end })
     }
-    this.samplePose(time, dt, wrapped, false)
+    this.samplePose(time, dt, wrapped, false, 'interactive')
     this.syncGizmo()
     this.syncCamera()
     this.controls.update()
@@ -549,7 +582,13 @@ export class SceneManager {
       this.needsFrame = false
     }
   }
-  private samplePose(time: number, dt: number, wrapped: boolean, fixed: boolean) {
+  private samplePose(
+    time: number,
+    dt: number,
+    wrapped: boolean,
+    fixed: boolean,
+    fine?: 'interactive' | 'capture',
+  ) {
     const s = store.getState(),
       t = s.timeline
     const formationWindow = formationStartWindow(s.slots, s.runtime, t.chainStartEnd)
@@ -573,21 +612,44 @@ export class SceneManager {
           (m) => m.slotId === slot.id && m.modelId === slot.motion && m.start === slot.clip,
         )
       const localTime = loopSlot && duration && time > duration ? time % duration : Math.min(time, duration)
-      const reset =
-        wrapped ||
-        changed ||
-        (!fixed && entry.placementChanged) ||
-        entry.lastSeek !== t.seekRevision ||
-        (entry.lastTime !== undefined && localTime < entry.lastTime)
-      if (reset) engine.reset()
+      const discontinuity = changed || (!fixed && entry.placementChanged) || entry.lastSeek !== t.seekRevision
+      const reset = discontinuity || wrapped || (entry.lastTime !== undefined && localTime < entry.lastTime)
+      const cross = engine.actorModel !== engine.driverModel
+      const grasping = slot.rig.gripIK && (cross || slot.rig.armSpread > 0)
+      const cloth = slot.rig.spring.enabled || (cross && slot.rig.antiClip)
+      const display =
+        grasping || cloth ? (entry.props?.displayedWeapon(slot, this.props.donor(slot.id)) ?? null) : null
+      const weaponChanged = entry.lastDisplay !== display || entry.lastWeapon !== slot.weapon
+      entry.clothDt = undefined
+      const pausedWeaponChange = cloth && weaponChanged && !t.playing
+      if (reset || pausedWeaponChange) {
+        engine.reset()
+        if (fine) {
+          if (discontinuity || pausedWeaponChange || fine === 'capture') entry.gpuCloth?.reset()
+          else entry.gpuCloth?.reseed()
+        }
+      }
       if (
         fixed ||
         reset ||
         entry.lastTime !== localTime ||
         entry.lastRig !== slot.rig ||
+        ((grasping || cloth) && (weaponChanged || entry.lastEmbedded !== slot.embedded)) ||
         (t.playing && engine.duration < time)
       ) {
-        engine.sample(time, fixed ? dt : reset || !t.playing ? 0 : dt * t.speed, slot.rig, loopSlot)
+        if (cross && grasping && entry.lastEmbedded !== slot.embedded) entry.props?.setEmbedded(slot.embedded)
+        entry.clothDt = fixed ? dt : reset || !t.playing ? 0 : dt * t.speed
+        engine.sample(
+          time,
+          entry.clothDt,
+          slot.rig,
+          loopSlot,
+          slot.weapon.attach === 'weaponTrack' ? display : null,
+          !!entry.props && cloth,
+        )
+        entry.lastWeapon = slot.weapon
+        entry.lastDisplay = display
+        entry.lastEmbedded = slot.embedded
         entry.lastTime = localTime
         entry.lastRig = slot.rig
         entry.lastClip = slot.clip
@@ -602,10 +664,62 @@ export class SceneManager {
           this.scene.add(entry.overlay.lines)
         }
         entry.overlay.lines.visible = true
-        entry.overlay.update(slot.rig.selectedBone)
       } else if (entry.overlay) entry.overlay.lines.visible = false
     }
     this.props.sync(time, this.slots, this.resolve)
+    const active = this.slots.get(s.activeId)
+    if (active?.overlay?.lines.visible) active.overlay.update(active.lastRig?.selectedBone ?? '')
+    if (fine && this.device) return this.stepFineCloth(fine === 'capture')
+  }
+
+  private createFineCloth(device: GpuDeviceLike, engine: RetargetEngine) {
+    const actor = engine.actorModel,
+      colliders = engine.colliders
+    const cloth = buildFineClothMesh(actor, colliders)
+    if (!cloth) return null
+    device.pushErrorScope?.('validation')
+    device.pushErrorScope?.('out-of-memory')
+    try {
+      return new WebGPUClothSolver(device, actor, colliders, cloth, () => this.fallbackGPU())
+    } finally {
+      for (let i = 0; i < 2; i++) {
+        void device.popErrorScope?.().then(
+          (error) => {
+            if (!error) return
+            if (error.message) console.warn('WebGPU cloth fallback:', error.message)
+            this.fallbackGPU()
+          },
+          () => this.fallbackGPU(),
+        )
+      }
+    }
+  }
+
+  private stepFineCloth(capture: boolean) {
+    const pending: Promise<void>[] = []
+    for (const slot of store.getState().slots) {
+      const entry = this.slots.get(slot.id)
+      if (!entry?.engine || !entry.actor || !this.device) continue
+      const { rig } = slot
+      if (!rig.gpuCloth || !(rig.spring.enabled || (rig.antiClip && slot.actor !== slot.motion))) {
+        entry.gpuCloth?.clear()
+        continue
+      }
+      const create = entry.gpuCloth === undefined
+      if (!create && entry.clothDt === undefined) continue
+      try {
+        if (create) entry.gpuCloth = this.createFineCloth(this.device, entry.engine)
+        const solver = entry.gpuCloth
+        if (!solver) continue
+        const dt = entry.clothDt ?? 0
+        if (capture) {
+          pending.push(solver.stepDeterministic(rig.spring, dt, rig.spring.enabled).catch(() => this.fallbackGPU()))
+        } else solver.dispatch(rig.spring, dt, rig.spring.enabled)
+      } catch {
+        this.fallbackGPU()
+      }
+    }
+    if (pending.length) return Promise.all(pending)
   }
 
   get canvas() {
@@ -652,16 +766,27 @@ export class SceneManager {
     for (const entry of entries) if (entry.overlay) helpers.push(entry.overlay.lines)
     const visibility = helpers.map((helper) => helper.visible)
     const restorePose = this.checkpointPose(time)
+    const finePoses = entries.map((entry) => entry.gpuCloth?.checkpoint())
     const orbitEnabled = this.controls.enabled,
       gizmoEnabled = this.gizmo.enabled
     const width = this.host.clientWidth,
       height = this.host.clientHeight
+    this.captureRevision++
     this.capturing = true
     cancelAnimationFrame(this.frameId)
     const restore = () => {
       if (!this.capturing || this.disposed) return
       try {
         restorePose()
+        entries.forEach((entry, i) => {
+          const resume = finePoses[i]
+          if (resume) resume()
+          else if (entry.gpuCloth) {
+            // This solver first appeared during capture. Re-sample the restored pose on the next frame.
+            entry.gpuCloth.reset()
+            entry.lastTime = undefined
+          }
+        })
       } finally {
         this.scene.background = stageBackground
         this.renderer.setClearAlpha(alpha)
@@ -700,20 +825,56 @@ export class SceneManager {
     }
   }
 
-  resetCapturePose() {
+  resetCapturePose(startTime?: number) {
     for (const entry of this.slots.values()) {
       entry.engine?.reset()
+      entry.gpuCloth?.reset()
       entry.lastTime = undefined
     }
+    if (startTime !== undefined && store.getState().slots.some((slot) => slot.rig.spring.enabled)) {
+      for (let i = 0; i < 15; i++) this.samplePose(startTime, 1 / 60, false, true)
+    }
   }
-  sampleDeterministic(time: number, dt: number) {
-    if (!this.capturing || this.disposed || this.renderer.getContext().isContextLost())
+  private checkCapture(revision: number) {
+    if (
+      !this.capturing ||
+      this.disposed ||
+      revision !== this.captureRevision ||
+      this.renderer.getContext().isContextLost()
+    )
       throw new Error('stageUnavailable')
+  }
+
+  async resetCapturePoseAsync(startTime?: number) {
+    const revision = this.captureRevision
+    await this.gpuReady
+    this.checkCapture(revision)
+    this.resetCapturePose()
+    if (startTime !== undefined && store.getState().slots.some((slot) => slot.rig.spring.enabled)) {
+      for (let i = 0; i < 15; i++) {
+        this.checkCapture(revision)
+        await this.samplePose(startTime, 1 / 60, false, true, 'capture')
+      }
+    }
+  }
+
+  async sampleDeterministicAsync(time: number, dt: number) {
+    const revision = this.captureRevision
+    await this.gpuReady
+    this.checkCapture(revision)
+    await this.samplePose(time, dt, false, true, 'capture')
+    this.checkCapture(revision)
+    this.renderer.render(this.scene, this.camera)
+  }
+
+  sampleDeterministic(time: number, dt: number) {
+    this.checkCapture(this.captureRevision)
     this.samplePose(time, dt, false, true)
     this.renderer.render(this.scene, this.camera)
   }
   dispose() {
     this.restoreCapture?.()
+    this.stopWatchingGPU?.()
     this.disposed = true
     cancelAnimationFrame(this.frameId)
     this.observer.disconnect()

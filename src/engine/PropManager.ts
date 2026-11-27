@@ -1,8 +1,18 @@
 import { Box3, Group, Matrix4, Mesh, Object3D, Quaternion, SkinnedMesh, Vector3 } from 'three'
 import { useStudioStore as store, type Slot, type StageSettings } from '../store/useStudioStore'
 import { decomposeRigTransform, rigBones, ModelLoader, type StudioModel } from './ModelLoader'
-import { ClipPlayer } from './RetargetEngine'
-import { canonicalBoneName } from './RigDefinition'
+import type { RetargetEngine } from './RetargetEngine'
+import { ClipPlayer } from './ClipPlayer'
+import {
+  gripProfile,
+  handGrip,
+  oppositeHand,
+  sides,
+  weaponCollapsed,
+  WeaponGrasp,
+  type Side,
+} from './GripCalibration'
+import { canonicalBoneName, weaponKey, weaponSourceKey } from './RigDefinition'
 import type { HaloSettings, MountedProp, Transform } from './PropTypes'
 
 const rad = Math.PI / 180
@@ -30,11 +40,10 @@ function indexModel(model: StudioModel) {
   const bones = new Map(rigBones(model).map((b) => [canonicalBoneName(b.name), b]))
   const halos = new Set(model.haloNodes)
   const haloRoots = [...halos].filter((node) => {
-    for (let parent = node.parent; parent; parent = parent.parent)
-      if (halos.has(parent)) return false
+    for (let parent = node.parent; parent; parent = parent.parent) if (halos.has(parent)) return false
     return true
   })
-  const grips = [...bones].filter(([key]) => /^bip001_weapon(?:_[rl])?$/.test(key)).map(([, node]) => node)
+  const grips = [...bones].filter(([key]) => weaponKey.test(key)).map(([, node]) => node)
   if (!bones.has('bip001') && model.weaponMeshes.length && !grips.length) grips.push(model.root)
   if (!grips.length) {
     for (const mesh of model.weaponMeshes) {
@@ -59,7 +68,16 @@ function indexModel(model: StudioModel) {
     if (node.name && node.type === 'Object3D' && !sockets.has(canonicalBoneName(node.name)))
       sockets.set(canonicalBoneName(node.name), node)
   }
-  return { bones, grips, groups, sockets, haloRoots }
+  const keys = new Map(grips.map((node) => [node, canonicalBoneName(node.name)]))
+  const tracks = new Map(grips.map((node) => [node, new Matrix4()]))
+  const originals = new Map(
+    [...grips, ...haloRoots].map((node) => [
+      node,
+      { position: new Vector3(), rotation: new Quaternion(), scale: new Vector3() },
+    ]),
+  )
+  const embeddedGroups = [...groups]
+  return { bones, grips, groups, embeddedGroups, sockets, haloRoots, keys, tracks, originals }
 }
 function binding(model: StudioModel) {
   let data = bindings.get(model)
@@ -86,11 +104,12 @@ function isolate(model: StudioModel, subset: string) {
 // Presentation edits must be removed before either the mixer or the retargeter
 // samples the next pose. This also prevents offsets accumulating on paused frames.
 export class SlotProps {
-  private readonly originals = new WeakMap<
-    Object3D,
-    { position: Vector3; rotation: Quaternion; scale: Vector3 }
-  >()
   private readonly editedGrips: Object3D[] = []
+  private readonly savedPoses: { position: Vector3; rotation: Quaternion; scale: Vector3 }[] = []
+  private readonly grasp = new WeaponGrasp()
+  private readonly handMatrices = { r: new Matrix4(), l: new Matrix4() }
+  private readonly hands: Record<Side, Matrix4 | undefined> = { r: undefined, l: undefined }
+  private readonly reflection = new Matrix4().makeScale(-1, 1, 1)
   private scratch = new Matrix4()
   private offset = new Matrix4()
   private target = new Matrix4()
@@ -106,30 +125,63 @@ export class SlotProps {
   constructor(
     readonly actor: StudioModel,
     readonly motion: StudioModel,
-  ) {}
+  ) {
+    binding(actor)
+    binding(motion)
+  }
   restore() {
-    for (const node of this.editedGrips) {
-      const saved = this.originals.get(node)!
+    for (let i = 0; i < this.editedGrips.length; i++) {
+      const node = this.editedGrips[i],
+        saved = this.savedPoses[i]
       node.position.copy(saved.position)
       node.quaternion.copy(saved.rotation)
       node.scale.copy(saved.scale)
       node.updateWorldMatrix(true, true)
     }
-    this.editedGrips.length = 0
+    this.editedGrips.length = this.savedPoses.length = 0
   }
   apply(slot: Slot, donor?: StudioModel, haloDonor?: StudioModel) {
-    for (const [name, meshes] of binding(this.motion).groups)
-      for (const mesh of meshes) this.motion.setPartEnabled(mesh, slot.embedded[name] !== false)
-    this.applyWeapon(slot, donor)
+    this.setEmbedded(slot.embedded)
+    const weapon = this.applyWeapon(slot, donor)
     this.applyHalo(slot, haloDonor)
+    return weapon
+  }
+  setEmbedded(embedded: Slot['embedded']) {
+    for (const [name, meshes] of binding(this.motion).embeddedGroups)
+      for (const mesh of meshes) this.motion.setPartEnabled(mesh, embedded[name] !== false)
   }
   private sourceModel(source: HaloSettings['source'], donor?: StudioModel) {
     switch (source) {
-      case 'actorA': return this.actor
-      case 'motionB': return this.motion
-      case 'donorC': return donor
-      case 'hidden': return undefined
+      case 'actorA':
+        return this.actor
+      case 'motionB':
+        return this.motion
+      case 'donorC':
+        return donor
+      case 'hidden':
+        return undefined
     }
+  }
+  prepareWeapon(slot: Slot, donor?: StudioModel) {
+    const w = slot.weapon
+    if (w.attach === 'rightHand') {
+      const model = this.sourceModel(w.source, donor)
+      if (model) gripProfile(model)
+    } else if (
+      slot.rig.gripIK &&
+      this.actor !== this.motion &&
+      (w.source === 'motionB' || w.source === 'donorC')
+    ) {
+      gripProfile(this.motion)
+      if (w.source === 'donorC' && donor) gripProfile(donor)
+    }
+  }
+  displayedWeapon(slot: Slot, donor?: StudioModel) {
+    if (slot.weapon.source === 'actorA' && !slot.rig.showActorWeapon) return null
+    return this.sourceModel(slot.weapon.source, donor) ?? null
+  }
+  trackedWeapon(slot: Slot, donor?: StudioModel) {
+    return slot.weapon.attach === 'weaponTrack' ? this.displayedWeapon(slot, donor) : null
   }
   private applyWeapon(slot: Slot, donor?: StudioModel) {
     const w = slot.weapon
@@ -138,51 +190,146 @@ export class SlotProps {
     this.actor.setWeaponsEnabled(this.actor === model && enabled)
     if (this.motion !== this.actor) this.motion.setWeaponsEnabled(this.motion === model && enabled)
     donor?.setWeaponsEnabled(donor === model && enabled)
-    if (!model) return
+    if (!model || !enabled) return
     const motion = binding(this.motion),
-      actor = binding(this.actor)
-    const hand = actor.bones.get('bip001_r_hand')
+      actor = binding(this.actor),
+      display = binding(model)
+    const align = slot.rig.gripIK && this.actor !== this.motion && w.attach === 'weaponTrack'
+    const offsets = w.scale !== 1 || w.position.some(Boolean) || w.rotation.some(Boolean)
+    if (
+      w.source === 'actorA' &&
+      w.attach === 'weaponTrack' &&
+      !offsets &&
+      (align || this.actor === this.motion)
+    )
+      return model
+    const mirror = slot.rig.mirror
+    const stage = this.actor.root.parent
+    stage?.updateWorldMatrix(true, false)
+    if (stage) this.stageWorld.copy(stage.matrixWorld)
+    else this.stageWorld.identity()
+    this.stageInv.copy(this.stageWorld).invert()
+    if (align && model !== this.actor) {
+      // Capture both tracks before writing either one (a mirrored motionB display
+      // reads the opposite pistol). A paused sample must be order-independent.
+      for (const grip of motion.grips) {
+        grip.updateWorldMatrix(true, false)
+        motion.tracks.get(grip)!.multiplyMatrices(this.stageInv, grip.matrixWorld)
+      }
+      for (const side of sides) {
+        const hand = motion.bones.get(side === 'r' ? 'bip001_r_hand' : 'bip001_l_hand')
+        hand?.updateWorldMatrix(true, false)
+        this.hands[side] = hand
+          ? this.handMatrices[side].multiplyMatrices(this.stageInv, hand.matrixWorld)
+          : undefined
+      }
+    }
     this.transform.position.fromArray(w.position)
     this.transform.rotation.set(w.rotation[0] * rad, w.rotation[1] * rad, w.rotation[2] * rad)
     this.transform.scale.setScalar(w.scale)
     this.transform.updateMatrix()
     this.offset.copy(this.transform.matrix)
-    for (const grip of binding(model).grips) {
+    for (const grip of display.grips) {
+      if (!grip.parent) continue
+      const key = display.keys.get(grip)!
+      const mapped = weaponKey.test(key) ? weaponSourceKey(key, mirror, motion.bones) : undefined
+      const spare = !mapped && key.startsWith('bip001_weapon_') && motion.bones.has('bip001_weapon')
       const actorEdit =
-        w.source === 'actorA' &&
-        (slot.rig.mixer.weapon !== 'motionB' ||
-          slot.rig.mirror ||
+        model === this.actor &&
+        (align ||
+          spare ||
+          slot.rig.mixer.weapon !== 'motionB' ||
+          mirror ||
           slot.rig.overrides[grip.name] !== undefined)
-      const source =
-        w.attach === 'rightHand'
-          ? hand
-          : actorEdit
-            ? grip
-            : (motion.bones.get(canonicalBoneName(grip.name)) ?? motion.grips[0])
-      if (!source || !grip.parent) continue
-      if (source === grip && w.scale === 1 && w.position.every((v) => !v) && w.rotation.every((v) => !v))
-        continue
+      const track = (mapped && motion.bones.get(mapped)) || motion.bones.get(key) || motion.grips[0]
+      const side = key === 'bip001_weapon_l' ? 'l' : 'r'
+      const snap = w.attach === 'rightHand'
+      const source = snap
+        ? actor.bones.get(side === 'r' ? 'bip001_r_hand' : 'bip001_l_hand')
+        : actorEdit
+          ? grip
+          : track
+      if (!source) continue
       source.updateWorldMatrix(true, false)
-      grip.parent.updateWorldMatrix(true, false)
-      // Express slider translations in stage units, independent of the GLB's cm/m bind scale.
-      this.target.copy(source.matrixWorld)
-      const bindScale = (w.attach === 'rightHand' || actorEdit ? this.actor : this.motion).rest.get(
-        source,
-      )?.restWorldScale
+      let bindScale = (actorEdit || snap ? this.actor : this.motion).rest.get(source)?.restWorldScale
+      if (snap) {
+        const displayGrip = gripProfile(model).weapons.get(key)
+        const ref = displayGrip && handGrip(displayGrip, side)
+        this.target.copy(source.matrixWorld)
+        if (ref?.valid) {
+          this.actorFrame.multiplyMatrices(this.stageInv, this.target)
+          this.grasp
+            .unscaled(this.target, this.actorFrame)
+            .multiply(ref.handToWeapon)
+            .premultiply(this.stageWorld)
+          bindScale = displayGrip!.bindScale
+        }
+      } else if (align && model !== this.actor) {
+        const trackKey = motion.keys.get(track)!
+        const driver = gripProfile(this.motion).weapons.get(trackKey)
+        const displayGrip = gripProfile(model).weapons.get(key)
+        const frame = motion.tracks.get(track)!
+        this.sourceFrame.copy(frame)
+        if (mirror) this.sourceFrame.premultiply(this.reflection).multiply(this.reflection)
+        this.target.copy(this.sourceFrame)
+        if (
+          driver &&
+          spare &&
+          displayGrip &&
+          !weaponCollapsed(this.scale.setFromMatrixScale(frame), driver.bindScale)
+        ) {
+          const hand = actor.bones.get(side === 'r' ? 'bip001_r_hand' : 'bip001_l_hand')
+          const ref = handGrip(displayGrip, side)
+          if (hand) {
+            hand.updateWorldMatrix(true, false)
+            this.actorFrame.multiplyMatrices(this.stageInv, hand.matrixWorld)
+            const donorHand = display.bones.get(side === 'r' ? 'bip001_r_hand' : 'bip001_l_hand')
+            this.grasp.snap(this.target, this.actorFrame, ref, donorHand && model.rest.get(donorHand), model.rest.get(grip)!)
+          }
+        } else if (driver) {
+          const primary = this.grasp.primary(
+            displayGrip?.key ?? 'bip001_weapon',
+            driver,
+            frame,
+            this.hands,
+            mirror,
+          )
+          const hand = primary && actor.bones.get(primary === 'r' ? 'bip001_r_hand' : 'bip001_l_hand')
+          if (primary && hand) {
+            hand.updateWorldMatrix(true, false)
+            const src = mirror ? oppositeHand(primary) : primary
+            this.actorFrame.multiplyMatrices(this.stageInv, hand.matrixWorld)
+            this.grasp.place(
+              this.target,
+              this.sourceFrame,
+              this.actorFrame,
+              this.hands[src]!,
+              frame,
+              displayGrip && handGrip(displayGrip, primary),
+              handGrip(driver, src),
+              this.grasp.weights[primary],
+              mirror,
+            )
+          }
+        }
+        this.target.premultiply(this.stageWorld)
+      } else {
+        if (source === grip && !offsets) continue
+        this.target.copy(source.matrixWorld)
+      }
       this.offset.elements[12] = w.position[0] / (Math.abs(bindScale?.x ?? 1) || 1)
       this.offset.elements[13] = w.position[1] / (Math.abs(bindScale?.y ?? 1) || 1)
       this.offset.elements[14] = w.position[2] / (Math.abs(bindScale?.z ?? 1) || 1)
+      grip.parent.updateWorldMatrix(true, false)
       this.scratch.copy(grip.parent.matrixWorld).invert().multiply(this.target).multiply(this.offset)
-      this.place(grip, this.scratch)
+      this.place(model, grip, this.scratch)
     }
+    return model
   }
-  private place(node: Object3D, local: Matrix4) {
+  private place(model: StudioModel, node: Object3D, local: Matrix4) {
     if (!this.editedGrips.includes(node)) {
-      let saved = this.originals.get(node)
-      if (!saved) {
-        saved = { position: new Vector3(), rotation: new Quaternion(), scale: new Vector3() }
-        this.originals.set(node, saved)
-      }
+      const saved = binding(model).originals.get(node)!
+      this.savedPoses.push(saved)
       saved.position.copy(node.position)
       saved.rotation.copy(node.quaternion)
       saved.scale.copy(node.scale)
@@ -247,7 +394,7 @@ export class SlotProps {
         .multiply(this.actorFrame)
         .multiply(this.transform.matrix)
         .multiply(this.target)
-      this.place(root, this.scratch)
+      this.place(model, root, this.scratch)
     }
   }
 }
@@ -340,6 +487,10 @@ export class PropManager {
           else model.weaponMeshes.push(...model.meshGroups.keys())
         }
         isolate(model, subset)
+        if (donorSlot !== undefined) {
+          binding(model)
+          if (donorKind === 'weapon') gripProfile(model)
+        }
         current.player = new ClipPlayer(model.root)
         current.content.add(model.root)
         this.onModelReady?.()
@@ -393,7 +544,10 @@ export class PropManager {
   }
   sync(
     time: number,
-    slots: Map<number, { group: Group; actor?: StudioModel; driver?: StudioModel; props?: SlotProps }>,
+    slots: Map<
+      number,
+      { group: Group; actor?: StudioModel; driver?: StudioModel; props?: SlotProps; engine?: RetargetEngine }
+    >,
     resolve: (id: string) => File | string | undefined,
   ) {
     const s = store.getState()
@@ -428,8 +582,15 @@ export class PropManager {
         item.model.syncSwitchVisibility(clip)
       }
     }
-    for (const slot of s.slots)
-      slots.get(slot.id)?.props?.apply(slot, this.donor(slot.id), this.haloDonor(slot.id))
+    for (const slot of s.slots) {
+      const entry = slots.get(slot.id)
+      const props = entry?.props
+      if (!props) continue
+      const donor = this.donor(slot.id)
+      props.prepareWeapon(slot, donor)
+      const weapon = props.apply(slot, donor, this.haloDonor(slot.id))
+      entry.engine?.finishCloth(weapon ?? null)
+    }
     for (const prop of s.props) {
       const source = prop.file ?? resolve(prop.modelId)
       if (!source) continue
@@ -456,7 +617,9 @@ export class PropManager {
           const local = this.gripLocal.copy(item.content.matrixWorld).invert().multiply(grip.matrixWorld)
           if (local.determinant() !== 0) {
             local.decompose(this.position, this.rotation, this.scale)
-            item.content.matrix.compose(this.position, this.rotation.normalize(), this.scale.setScalar(1)).invert()
+            item.content.matrix
+              .compose(this.position, this.rotation.normalize(), this.scale.setScalar(1))
+              .invert()
             item.content.updateMatrixWorld(true)
           }
         }

@@ -3,6 +3,7 @@ import {
   BufferAttribute,
   BufferGeometry,
   Color,
+  DynamicDrawUsage,
   Matrix4,
   Mesh,
   Object3D,
@@ -10,6 +11,15 @@ import {
   SkinnedMesh,
   Vector3,
 } from 'three'
+
+export function ensureClothOffsetAttribute(geometry: BufferGeometry): BufferAttribute {
+  let offset = geometry.getAttribute('clothOffset') as BufferAttribute | undefined
+  if (!offset) {
+    offset = new BufferAttribute(new Float32Array(geometry.getAttribute('position').count * 3), 3)
+    geometry.setAttribute('clothOffset', offset.setUsage(DynamicDrawUsage))
+  }
+  return offset
+}
 
 export function isBakedOutline(node: Object3D) {
   for (let part: Object3D | null = node; part; part = part.parent)
@@ -88,6 +98,9 @@ const vertexShader = `
 #include <common>
 #include <morphtarget_pars_vertex>
 #include <skinning_pars_vertex>
+#ifdef USE_CLOTH_OFFSET
+attribute vec3 clothOffset;
+#endif
 attribute vec3 smoothNormal;
 uniform float outlineWidth;
 uniform float restScale;
@@ -102,6 +115,9 @@ void main() {
   vec3 transformed = position;
   #include <morphtarget_vertex>
   #include <skinning_vertex>
+  #ifdef USE_CLOTH_OFFSET
+    transformed += clothOffset;
+  #endif
   vec4 mvPosition = modelViewMatrix * vec4(transformed, 1.0);
   float shrink = axisScale(mat3(modelMatrix)) / restScale;
   #ifdef USE_SKINNING
@@ -141,6 +157,7 @@ export class OutlineEffect {
       const restScale = axisScale(mesh.matrixWorld) || axisScale(root.matrixWorld) || 1
       const material = new ShaderMaterial({
         side: BackSide,
+        defines: mesh.geometry.hasAttribute('clothOffset') ? { USE_CLOTH_OFFSET: '' } : {},
         vertexShader,
         fragmentShader,
         uniforms: {
@@ -153,8 +170,10 @@ export class OutlineEffect {
         mesh instanceof SkinnedMesh
           ? new SkinnedMesh(mesh.geometry, material)
           : new Mesh(mesh.geometry, material)
-      if (hull instanceof SkinnedMesh && mesh instanceof SkinnedMesh)
+      if (hull instanceof SkinnedMesh && mesh instanceof SkinnedMesh) {
+        hull.bindMode = mesh.bindMode
         hull.bind(mesh.skeleton, mesh.bindMatrix)
+      }
       hull.name = mesh.name + '__outline'
       hull.userData.isOutline = true
       hull.renderOrder = -1

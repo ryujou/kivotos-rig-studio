@@ -14,6 +14,7 @@ import type { ExportSettings, Viewport } from '../engine/exportSpec'
 import type { JointCombo } from '../data/jointCombos'
 import type { AnimationClip } from 'three'
 import { clipSequence, sequenceDuration } from '../engine/AnimationUtils'
+import type { WebGPUState } from '../engine/WebGPUContext'
 import { defaultRig, type RigSettings } from '../engine/RigDefinition'
 import type { ClipInfo, Shading } from '../engine/ModelLoader'
 
@@ -179,6 +180,8 @@ interface UI {
   gizmo: 'off' | 'move' | 'rotate' | 'scale'
 }
 interface StudioState {
+  gpu: Pick<WebGPUState, 'status' | 'label'>
+  setGpu: (gpu: StudioState['gpu']) => void
   language: Language
   theme: 'light' | 'dark'
   recentPicks: string[]
@@ -303,6 +306,8 @@ export const useStudioStore = create<StudioState>((set, get) => {
       }
     })
   return {
+    gpu: { status: 'probing', label: '' },
+    setGpu: (gpu) => set({ gpu }),
     language: firstLanguage,
     theme: readPreference('theme') === 'dark' ? 'dark' : 'light',
     recentPicks: [],

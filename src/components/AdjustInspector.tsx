@@ -5,6 +5,8 @@ import {
   bodyParts,
   canonicalBoneName,
   mirrorBoneName,
+  weaponKey,
+  weaponSourceKey,
   type BoneOverride,
   type PartSource,
   type Vec3,
@@ -84,6 +86,10 @@ export function AdjustInspector() {
   const auto = (name: string) => {
     if (runtime?.manualOnlyTargets?.has(name)) return undefined
     const key = canonicalBoneName(name)
+    if (weaponKey.test(key)) {
+      const source = weaponSourceKey(key, rig.mirror, mapping)
+      return source && mapping.get(source)
+    }
     return mapping.get(rig.mirror ? mirrorBoneName(key) : key)
   }
   const filtered = targets.filter((name) => name.toLowerCase().includes(search.trim().toLowerCase()))
@@ -162,7 +168,7 @@ export function AdjustInspector() {
         <summary>{t('rootTuning')}</summary>
         <div className="rig-subheading">
           <span>{t('rootOffset')}</span>
-          <button className="rig-reset" onClick={() => set({ offset: [0, 0, 0] })}>
+          <button className="rig-reset" onClick={() => set({ offset: [0, 0, 0], armSpread: 0 })}>
             <RotateCcw size={12} />
             {t('zeroOffset')}
           </button>
@@ -175,21 +181,33 @@ export function AdjustInspector() {
           unit=" m"
           change={(offset) => set({ offset })}
         />
-        {(['stiffness', 'damping'] as const).map((key) => (
-          <label className="slider-row" key={key}>
-            <span>{t(key)}</span>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step=".01"
-              disabled={!rig.spring.enabled}
-              value={rig.spring[key]}
-              onChange={(e) => set({ spring: { ...rig.spring, [key]: Number(e.target.value) } })}
-            />
-            <code>{Math.round(100 * rig.spring[key])}%</code>
-          </label>
-        ))}
+        <label className="slider-row">
+          <span>{t('armSpread')}</span>
+          <input
+            type="range"
+            min="0"
+            max="30"
+            step="0.5"
+            value={rig.armSpread}
+            onChange={(e) => set({ armSpread: Number(e.target.value) })}
+          />
+          <code>{rig.armSpread.toFixed(1)}°</code>
+        </label>
+        {rig.spring.enabled &&
+          (['stiffness', 'damping', 'wind'] as const).map((key) => (
+            <label className="slider-row" key={key}>
+              <span>{t(key)}</span>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step=".01"
+                value={rig.spring[key]}
+                onChange={(e) => set({ spring: { ...rig.spring, [key]: Number(e.target.value) } })}
+              />
+              <code>{Math.round(100 * rig.spring[key])}%</code>
+            </label>
+          ))}
       </details>
       <details className="disclosure remapper">
         <summary>{t('mappingSkeleton')}</summary>

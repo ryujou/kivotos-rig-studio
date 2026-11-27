@@ -11,10 +11,16 @@ export interface SpringSettings {
   enabled: boolean
   stiffness: number
   damping: number
+  windAngle: number
+  wind: number
   gravity: number
 }
 export interface RigSettings {
   rootMode: 'ground-scaled' | 'prop-locked'
+  gpuCloth: boolean
+  gripIK: boolean
+  antiClip: boolean
+  armSpread: number
   offset: Vec3
   mixer: Record<BodyPart, PartSource>
   spring: SpringSettings
@@ -28,6 +34,10 @@ export interface RigSettings {
 export function defaultRig(): RigSettings {
   return {
     rootMode: 'ground-scaled',
+    antiClip: true,
+    gripIK: true,
+    gpuCloth: true,
+    armSpread: 0,
     offset: [0, 0, 0],
     mixer: {
       head: 'motionB',
@@ -38,7 +48,7 @@ export function defaultRig(): RigSettings {
       legs: 'motionB',
       weapon: 'motionB',
     },
-    spring: { enabled: false, stiffness: 0.5, damping: 0.15, gravity: 1.8 },
+    spring: { enabled: false, stiffness: 0.5, damping: 0.15, gravity: 1.8, wind: 0, windAngle: 0 },
     expressionSync: true,
     mirror: false,
     secondaryClip: '',
@@ -72,6 +82,14 @@ export function mirrorBoneName(key: string) {
     .split('_')
     .map((word) => opposite[word] ?? word)
     .join('_')
+}
+export const weaponKey = /^bip001_weapon(?:_[rl])?$/
+export function weaponSourceKey(key: string, mirror: boolean, available: ReadonlyMap<string, unknown>) {
+  if (key === 'bip001_weapon' && available.has(key)) return key
+  const left = key.endsWith('_l') !== mirror
+  const dual = left ? 'bip001_weapon_l' : 'bip001_weapon_r'
+  if (available.has(dual)) return dual
+  if (!left && available.has('bip001_weapon')) return 'bip001_weapon'
 }
 export function classifyBone(key: string): BodyPart | 'secondary' {
   if (/weapon/.test(key)) return 'weapon'

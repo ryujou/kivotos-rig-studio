@@ -22,7 +22,8 @@ export interface CaptureInput {
   viewport: Viewport
   springs: boolean
 }
-type CaptureScene = Pick<SceneManager, 'canvas' | 'beginCapture' | 'sampleDeterministic' | 'resetCapturePose'>
+type CaptureScene = Pick<SceneManager, 'canvas' | 'beginCapture' | 'sampleDeterministic' | 'resetCapturePose'> &
+  Partial<Pick<SceneManager, 'sampleDeterministicAsync' | 'resetCapturePoseAsync'>>
 function workerChannel(worker: Worker, signal: AbortSignal) {
   let resolve: ((reply: WorkerReply) => void) | undefined
   let reject: ((error: Error) => void) | undefined
@@ -151,6 +152,10 @@ export async function exportClip(
       height,
     )
   }
+  const sample = (time: number, dt: number) =>
+    scene.sampleDeterministicAsync
+      ? interruptible(scene.sampleDeterministicAsync(time, dt), signal)
+      : scene.sampleDeterministic(time, dt)
   const restore = scene.beginCapture(background)
   // A replacement export can acquire the same scene before the aborted promise settles.
   let released = false
@@ -187,19 +192,21 @@ export async function exportClip(
       for (let i = 0; i < samples; i++) {
         signal.throwIfAborted()
         const frame = samples === 1 ? 0 : Math.round((i * (frames - 1)) / (samples - 1))
-        scene.sampleDeterministic(start + frame * step, 0)
+        const sampled = sample(start + frame * step, 0)
+        if (sampled) await sampled
+        signal.throwIfAborted()
         draw()
         const rgba = ctx.getImageData(0, 0, width, height).data
         await channel!.send({ type: 'sample', rgba }, [rgba.buffer])
       }
-      scene.resetCapturePose()
     }
-    if (timeline.loop && input.springs) {
-      for (let i = 0; i < 6; i++) scene.sampleDeterministic(start, 1 / fps)
-    }
+    if (scene.resetCapturePoseAsync) await interruptible(scene.resetCapturePoseAsync(start), signal)
+    else if (input.springs || (format === 'gif' && settings.quality === 'balanced')) scene.resetCapturePose(start)
     for (let i = 0; i < frames; i++) {
       signal.throwIfAborted()
-      scene.sampleDeterministic(start + i * step, 1 / fps)
+      const sampled = sample(start + i * step, i === 0 ? 0 : 1 / fps)
+      if (sampled) await sampled
+      signal.throwIfAborted()
       draw()
       progress({
         phase: 'capturing',
