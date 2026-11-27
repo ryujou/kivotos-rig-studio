@@ -1,14 +1,14 @@
-import { Focus, FolderOpen, LoaderCircle, MousePointer2, RefreshCw, Scan } from 'lucide-react'
+import { FolderOpen, LoaderCircle, MousePointer2, RefreshCw, Scan } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { droppedFiles, parseFurnitureFiles, mountFurniture } from '../services/furniturePack'
 import { jointCombos } from '../data/jointCombos'
-import { jointSlug, loadJoint } from '../services/jointLoader'
+import { jointErrorMessage, jointSlug, loadJoint } from '../services/jointLoader'
 import type { MessageKey } from '../i18n'
 import type { SceneManager } from '../engine/SceneManager'
 import { useActiveSlot, useStudioStore, useText } from '../store/useStudioStore'
 import { CropOverlay } from './CropOverlay'
 import { bindExportScene } from '../store/exportSession'
-import { IconButton, useModelLabel } from './shared'
+import { useModelLabel } from './shared'
 
 export function Viewport3D() {
   const t = useText(),
@@ -116,13 +116,8 @@ export function Viewport3D() {
                   state.updateUI({ left: 'joint', leftOpen: true })
                   return
                 }
-                await loadJoint(combo, bySlug).catch(() => setDropError('jointFailed'))
-              } else if (
-                state.ui.left === 'props' ||
-                state.mode === 'propMode' ||
-                files.length > 1 ||
-                /\.zip$/i.test(files[0].name)
-              ) {
+                await loadJoint(combo, bySlug).catch((error) => setDropError(jointErrorMessage(error)))
+              } else if (state.ui.left === 'props' || files.length > 1 || /\.zip$/i.test(files[0].name)) {
                 mountFurniture(await parseFurnitureFiles(files), state.activeId)
               } else if (/\.glb$/i.test(files[0].name)) open(files[0])
             })
@@ -151,7 +146,11 @@ export function Viewport3D() {
           {t(showPoster ? 'reference' : 'viewport')}
         </div>
         {showPoster && (
-          <img className="stage-poster" src="./hina-dress-preview.webp" alt={label(slot.actor)} />
+          <img
+            className="stage-poster"
+            src={import.meta.env.BASE_URL + 'hina-dress-preview.webp'}
+            alt={label(slot.actor)}
+          />
         )}
         {dropError && (
           <div className="load-state" role="alert">
@@ -206,12 +205,6 @@ export function Viewport3D() {
               <MousePointer2 size={12} />
               {t('orbitHint')}
             </span>
-            <IconButton label={t('openGlb')} onClick={() => file.current?.click()}>
-              <FolderOpen size={15} />
-            </IconButton>
-            <IconButton label={t('reset')} onClick={() => useStudioStore.getState().setCamera('reset')}>
-              <Focus size={15} />
-            </IconButton>
           </div>
         )}
       </div>

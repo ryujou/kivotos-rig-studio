@@ -94,7 +94,7 @@ export const interactions = {
     '动作 B 的内置道具',
     'モーション B の内蔵小物',
     '모션 B의 내장 소품',
-    'Motion B scene props',
+    'Embedded scene props',
   ),
   noProps: l(
     '此模型没有独立的道具网格。',

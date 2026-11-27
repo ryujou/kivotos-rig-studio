@@ -1,6 +1,7 @@
 import { fallbackCatalog } from '../data/fallbackCatalog'
 import { propModelIds } from '../data/propModels'
 import { searchAliases, studentNames, type StudentName } from '../i18n/studentNames'
+import { schoolNames, studentSchools, type School } from '../i18n/schools'
 import { variantNames } from '../i18n/variants'
 import { languages, localized, type Language, type Localized } from '../i18n/types'
 
@@ -15,6 +16,7 @@ export interface WikiCatalogData {
   characters: { name: string; models: WikiModel[] }[]
 }
 export interface CatalogModel extends WikiModel {
+  school: School
   student: string
   names: Localized
   tags: string[]
@@ -41,6 +43,16 @@ export function modelLabel(model: CatalogModel, lang: Language) {
   )
 }
 
+export function filterCharacters(models: CatalogModel[], query: string, school: School | 'all', tag: string) {
+  const terms = normalizeSearch(query).split(' ').filter(Boolean)
+  return models.filter(
+    (model) =>
+      (school === 'all' || model.school === school) &&
+      (tag === 'all' || (tag === 'hasProps' ? model.hasProps : model.tags.includes(tag))) &&
+      terms.every((term) => model.search.includes(term)),
+  )
+}
+
 function enrich(data: WikiCatalogData): CatalogModel[] {
   const seen = new Set<string>()
   const models: CatalogModel[] = []
@@ -48,6 +60,7 @@ function enrich(data: WikiCatalogData): CatalogModel[] {
     if (typeof name !== 'string' || !Array.isArray(entries)) throw new Error('invalid_character')
     const key = name as StudentName
     const names = Object.hasOwn(studentNames, name) ? studentNames[key] : localized(name, name, name, name)
+    const school = Object.hasOwn(studentSchools, name) ? studentSchools[key] : 'other'
     for (const entry of entries) {
       if (
         ![entry.id, entry.label, entry.file, entry.skin].every((v) => typeof v === 'string') ||
@@ -59,7 +72,14 @@ function enrich(data: WikiCatalogData): CatalogModel[] {
       const tags = entry.skin ? entry.skin.split(/\s*\/\s*/) : ['Default']
       const url = new URL(entry.file, data.base)
       if (url.protocol !== 'https:') throw new Error('invalid_url')
-      const words = [name, entry.id, entry.label, ...Object.values(names), searchAliases[key] ?? '']
+      const words = [
+        name,
+        entry.id,
+        entry.label,
+        ...Object.values(names),
+        ...Object.values(schoolNames[school]),
+        searchAliases[key] ?? '',
+      ]
       for (const tag of tags) {
         words.push(tag, ...languages.map((lang) => variantLabel(tag, lang)))
         if (tag === 'Riding' || tag === 'Kid')
@@ -68,11 +88,12 @@ function enrich(data: WikiCatalogData): CatalogModel[] {
       models.push({
         ...entry,
         student: name,
+        school,
         names,
         tags,
         url: url.href,
         search: normalizeSearch(words.join(' ')),
-        hasProps: propModelIds.has(entry.id) || tags.includes('Carrier'),
+        hasProps: propModelIds.has(entry.id),
       })
       seen.add(entry.id)
     }

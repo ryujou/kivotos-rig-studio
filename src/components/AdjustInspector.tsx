@@ -1,13 +1,5 @@
-import {
-  Activity,
-  Bone,
-  ChevronDown,
-  CircleUserRound,
-  Crosshair,
-  Layers,
-  RotateCcw,
-  Search,
-} from 'lucide-react'
+import { Crosshair, RotateCcw, Search } from 'lucide-react'
+import { WeaponControls, SceneOutliner } from './PropInspector'
 import { useState } from 'react'
 import {
   bodyParts,
@@ -65,11 +57,15 @@ function Axes({
   )
 }
 
-export function RiggingInspector() {
+export function AdjustInspector() {
   const slot = useActiveSlot(),
     { rig } = slot,
     t = useText()
   const runtime = useStudioStore((s) => s.runtime[slot.id])
+  const ui = useStudioStore((s) => s.ui)
+  const setUI = useStudioStore((s) => s.updateUI)
+  const slots = useStudioStore((s) => s.slots.length)
+  const mounted = useStudioStore((s) => s.props.length)
   const update = useStudioStore((s) => s.setSlotRig)
   const set = (value: Partial<typeof rig>) => update(slot.id, value)
   const [search, setSearch] = useState('')
@@ -92,11 +88,12 @@ export function RiggingInspector() {
   const filtered = targets.filter((name) => name.toLowerCase().includes(search.trim().toLowerCase()))
   const actorClips = runtime?.actorClips ?? []
   return (
-    <div className="inspector-scroll rig-controls">
+    <div className="inspector-scroll adjust-inspector">
+      <WeaponControls />
       <section className="control-section">
         <h3>
           <Crosshair />
-          {t('rootMotion')}
+          {t('rootMode')}
         </h3>
         <div className="rig-segment">
           {(['ground-scaled', 'prop-locked'] as const).map((mode) => (
@@ -105,27 +102,20 @@ export function RiggingInspector() {
             </button>
           ))}
         </div>
-        <div className="rig-subheading">
-          <span>{t('rootOffset')}</span>
-          <button className="rig-reset" onClick={() => set({ offset: [0, 0, 0] })}>
-            <RotateCcw size={12} />
-            {t('zeroOffset')}
-          </button>
-        </div>
-        <Axes
-          label={t('rootOffset')}
-          value={rig.offset}
-          limit={0.5}
-          step={0.001}
-          unit=" m"
-          change={(offset) => set({ offset })}
+        <Toggle
+          label={t('expressionSync')}
+          checked={rig.expressionSync}
+          onChange={() => set({ expressionSync: !rig.expressionSync })}
         />
+        <Toggle
+          label={t('hairPhysics')}
+          checked={rig.spring.enabled}
+          onChange={() => set({ spring: { ...rig.spring, enabled: !rig.spring.enabled } })}
+        />
+        <Toggle label={t('mirror')} checked={rig.mirror} onChange={() => set({ mirror: !rig.mirror })} />
       </section>
-      <section className="control-section">
-        <h3>
-          <Layers />
-          {t('bodyMixer')}
-        </h3>
+      <details className="disclosure">
+        <summary>{t('bodyMixer')}</summary>
         <div className="part-mixer">
           {bodyParts.map((part) => {
             const mode = rig.mixer[part]
@@ -164,16 +154,23 @@ export function RiggingInspector() {
             </select>
           </label>
         )}
-      </section>
-      <section className="control-section">
-        <h3>
-          <Activity />
-          {t('physics')}
-        </h3>
-        <Toggle
-          label={t('springEnabled')}
-          checked={rig.spring.enabled}
-          onChange={() => set({ spring: { ...rig.spring, enabled: !rig.spring.enabled } })}
+      </details>
+      <details className="disclosure">
+        <summary>{t('rootTuning')}</summary>
+        <div className="rig-subheading">
+          <span>{t('rootOffset')}</span>
+          <button className="rig-reset" onClick={() => set({ offset: [0, 0, 0] })}>
+            <RotateCcw size={12} />
+            {t('zeroOffset')}
+          </button>
+        </div>
+        <Axes
+          label={t('rootOffset')}
+          value={rig.offset}
+          limit={0.5}
+          step={0.001}
+          unit=" m"
+          change={(offset) => set({ offset })}
         />
         {(['stiffness', 'damping'] as const).map((key) => (
           <label className="slider-row" key={key}>
@@ -190,38 +187,14 @@ export function RiggingInspector() {
             <code>{Math.round(100 * rig.spring[key])}%</code>
           </label>
         ))}
-      </section>
-      <section className="control-section">
-        <h3>
-          <CircleUserRound />
-          {t('expressionSync')}
-        </h3>
+      </details>
+      <details className="disclosure remapper">
+        <summary>{t('mappingSkeleton')}</summary>
         <Toggle
-          label={t('eyesMouth')}
-          checked={rig.expressionSync}
-          onChange={() => set({ expressionSync: !rig.expressionSync })}
+          label={t('skeleton')}
+          checked={ui.skeleton}
+          onChange={() => setUI({ skeleton: !ui.skeleton })}
         />
-        <Toggle
-          label={t('actorWeapon')}
-          checked={rig.showActorWeapon && slot.weapon.source === 'actorA'}
-          onChange={() => {
-            const show = !rig.showActorWeapon || slot.weapon.source !== 'actorA'
-            useStudioStore
-              .getState()
-              .updateSlot(slot.id, {
-                weapon: { ...slot.weapon, source: show ? 'actorA' : 'hidden' },
-                rig: { ...rig, showActorWeapon: show },
-              })
-          }}
-        />
-      </section>
-      <details className="control-section remapper">
-        <summary>
-          <Bone size={15} />
-          {t('boneMapper')}
-          <ChevronDown size={14} />
-        </summary>
-        <Toggle label={t('mirror')} checked={rig.mirror} onChange={() => set({ mirror: !rig.mirror })} />
         <label className="search-field">
           <Search size={14} />
           <input
@@ -292,6 +265,21 @@ export function RiggingInspector() {
           <RotateCcw size={13} />
           {t('resetMapping')}
         </button>
+      </details>
+      <details className="disclosure">
+        <summary>
+          {t('sceneSlots')}
+          {(slots > 1 || mounted > 0) && <span className="counter">{slots + mounted}</span>}
+        </summary>
+        <div className="field-label">{t('gizmo')}</div>
+        <div className="weapon-options" role="group" aria-label={t('gizmo')}>
+          {(['off', 'move', 'rotate', 'scale'] as const).map((gizmo) => (
+            <button key={gizmo} aria-pressed={ui.gizmo === gizmo} onClick={() => setUI({ gizmo })}>
+              {t(gizmo)}
+            </button>
+          ))}
+        </div>
+        <SceneOutliner />
       </details>
     </div>
   )

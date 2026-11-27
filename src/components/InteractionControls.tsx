@@ -53,7 +53,7 @@ export function CastSelect({ slot, children }: { slot: Slot; children?: ReactNod
       label={t('cast') + ' · ' + t('slot') + ' ' + slot.id}
       onChange={(id) => {
         s.focusSlot(slot.id)
-        s.castActor(slot.id, id)
+        s.assign('actor', id)
       }}
     >
       {children}

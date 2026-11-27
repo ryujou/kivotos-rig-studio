@@ -60,25 +60,20 @@ export function ExportInspector() {
             </button>
           ))}
         </div>
-        <Toggle
-          label={t('viewfinder')}
-          checked={settings.showViewfinder}
-          onChange={() => set({ showViewfinder: !settings.showViewfinder })}
-        />
         <button className="frame-button" onClick={() => useStudioStore.getState().setCamera('fitCrop')}>
           <Focus size={14} />
           {t('fitCrop')}
         </button>
         <Choices
           label={t('resolution')}
-          values={['original', 256, 360, 480, 512, 720] as const}
+          values={['original', 256, 480, 720] as const}
           value={settings.resolution}
           select={(resolution) => set({ resolution })}
           name={(resolution) => (resolution === 'original' ? t('originalResolution') : String(resolution))}
         />
         <Choices
           label={t('fps')}
-          values={[15, 20, 24, 30]}
+          values={[15, 24, 30]}
           value={settings.fps}
           select={(fps) => set({ fps })}
           name={String}
@@ -100,7 +95,7 @@ export function ExportInspector() {
                 className={'swatch swatch-' + bg}
                 style={bg === 'solid' ? { background: settings.solidColor } : undefined}
               />
-              {t(bg === 'stage' ? 'matchStage' : bg === 'transparent' ? 'sticker' : 'solid')}
+              {t(bg === 'stage' ? 'matchStage' : bg)}
             </button>
           ))}
         </div>
@@ -114,6 +109,9 @@ export function ExportInspector() {
             />
           </label>
         )}
+      </section>
+      <details className="disclosure">
+        <summary>{t('advancedExport')}</summary>
         {(settings.background === 'transparent' || (settings.background === 'stage' && transparentStage)) && (
           <label className="slider-row matte">
             <span>{t('alphaCutoff')}</span>
@@ -140,7 +138,12 @@ export function ExportInspector() {
             ))}
           </select>
         </label>
-      </section>
+        <Toggle
+          label={t('viewfinder')}
+          checked={settings.showViewfinder}
+          onChange={() => set({ showViewfinder: !settings.showViewfinder })}
+        />
+      </details>
       <section className="control-section export-trim">
         <h3>
           <Scissors />

@@ -5,7 +5,7 @@ import { useActiveSlot, useStudioStore, useText } from '../store/useStudioStore'
 import { AxisSliders, BoneSelect, ModelSelect } from './InteractionControls'
 import { Toggle, IconButton, useModelLabel } from './shared'
 
-export function MountedList() {
+function MountedList() {
   const t = useText(),
     label = useModelLabel(),
     props = useStudioStore((s) => s.props),
@@ -96,7 +96,7 @@ export function MountedList() {
     </section>
   )
 }
-export function PropInspector() {
+export function WeaponControls() {
   const t = useText(),
     slot = useActiveSlot(),
     runtime = useStudioStore((s) => s.runtime[s.activeId])
@@ -110,37 +110,36 @@ export function PropInspector() {
     if (runtime?.donorError) s.updateRuntime(slot.id, { donorError: false })
   }
   return (
-    <div className="work-scroll">
-      <section>
-        <h3 className="work-heading">
-          <Layers3 size={15} />
-          {t('embeddedProps')}
-        </h3>
-        {runtime?.propGroups.map((name, i) => (
-          <Toggle
-            key={name}
-            title={name}
-            label={meshLabel(name, i, t)}
-            checked={slot.embedded[name] !== false}
-            onChange={() =>
-              s.updateSlot(slot.id, {
-                embedded: { ...slot.embedded, [name]: slot.embedded[name] === false },
-              })
-            }
-          />
-        ))}
-        {!runtime?.propGroups.length && (
-          <small>{t(runtime?.status === 'ready' ? 'noProps' : 'loading')}</small>
-        )}
-      </section>
-      <section>
+    <>
+      {!!runtime?.propGroups.length && (
+        <section className="control-section">
+          <h3 className="work-heading">
+            <Layers3 size={15} />
+            {t('embeddedProps')}
+          </h3>
+          {runtime?.propGroups.map((name, i) => (
+            <Toggle
+              key={name}
+              title={name}
+              label={meshLabel(name, i, t)}
+              checked={slot.embedded[name] !== false}
+              onChange={() =>
+                s.updateSlot(slot.id, {
+                  embedded: { ...slot.embedded, [name]: slot.embedded[name] === false },
+                })
+              }
+            />
+          ))}
+        </section>
+      )}
+      <section className="control-section">
         <h3 className="work-heading">{t('weaponSource')}</h3>
         <div className="weapon-options">
           {(
             [
-              ['actorA', 'actorWeapon'],
-              ['motionB', 'motionWeapon'],
-              ['donorC', 'donorWeapon'],
+              ['actorA', 'actor'],
+              ['motionB', 'motion'],
+              ['donorC', 'donor'],
               ['hidden', 'hide'],
             ] as const
           ).map(([source, key]) => (
@@ -173,7 +172,8 @@ export function PropInspector() {
           </>
         )}
         {w.source !== 'hidden' && (
-          <>
+          <details className="disclosure grip-offset">
+            <summary>{t('gripOffset')}</summary>
             <label className="select-row">
               {t('attachMode')}
               <select
@@ -216,11 +216,10 @@ export function PropInspector() {
             >
               {t('zeroOffset')}
             </button>
-          </>
+          </details>
         )}
       </section>
-      <MountedList />
-    </div>
+    </>
   )
 }
 export function SceneOutliner() {
@@ -231,7 +230,7 @@ export function SceneOutliner() {
     selected = useStudioStore((s) => s.selectedProp),
     s = useStudioStore.getState()
   return (
-    <div className="work-scroll">
+    <>
       <h3 className="work-heading">
         <Layers3 size={15} />
         {t('outliner')}
@@ -265,15 +264,13 @@ export function SceneOutliner() {
                 <button onClick={() => s.transformSlot(slot.id, identityTransform())}>
                   {t('zeroOffset')}
                 </button>
-                {slots.length > 1 && (
-                  <button onClick={() => s.removeSlot(slot.id)}>{t('removeSlot')}</button>
-                )}
+                {slots.length > 1 && <button onClick={() => s.removeSlot(slot.id)}>{t('removeSlot')}</button>}
               </div>
             </div>
           )}
         </article>
       ))}
       <MountedList />
-    </div>
+    </>
   )
 }

@@ -15,9 +15,9 @@ import { clipSequence, sequenceDuration } from '../engine/AnimationUtils'
 import { defaultRig, type RigSettings } from '../engine/RigDefinition'
 import type { ClipInfo, Shading } from '../engine/ModelLoader'
 
-export type Mode = 'solo' | 'jointVictory' | 'propMode'
-export type LeftTab = 'characters' | 'joint' | 'props' | 'scene'
-export type InspectorTab = 'props' | 'rigging' | 'stage' | 'export'
+export type AssignmentTarget = 'actor' | 'motion'
+export type LeftTab = 'characters' | 'joint' | 'props'
+export type InspectorTab = 'adjust' | 'stage' | 'export'
 export type CameraPreset = 'front' | 'threeQuarter' | 'side' | 'back' | 'face' | 'group' | 'reset' | 'fitCrop'
 type Vec3 = [number, number, number]
 export interface Lighting {
@@ -139,14 +139,14 @@ interface UI {
   right: InspectorTab
   leftOpen: boolean
   rightOpen: boolean
-  presets: boolean
+  target: AssignmentTarget
   skeleton: boolean
   gizmo: 'off' | 'move' | 'rotate' | 'scale'
 }
 interface StudioState {
   language: Language
   theme: 'light' | 'dark'
-  mode: Mode
+  recentPicks: string[]
   ui: UI
   models: CatalogModel[]
   wiki: 'connecting' | 'live' | 'offline'
@@ -164,8 +164,7 @@ interface StudioState {
   selectProp: (id: string) => void
   updateSlot: (id: number, patch: Partial<Slot>) => void
   castActor: (id: number, actor: string) => void
-  loadFormation: (combo: JointCombo, clips: AnimationClip[][], cast?: readonly string[]) => void
-  showcaseSolo: (actor: string, motion: string, clip: string, combat: boolean) => void
+  loadFormation: (combo: JointCombo, clips: AnimationClip[][]) => void
   transformSlot: (id: number, transform: Partial<Transform>) => void
   joint: JointSession
   timeline: Timeline
@@ -173,13 +172,12 @@ interface StudioState {
   exportSettings: ExportSettings
   setLanguage: (lang: Language) => void
   toggleTheme: () => void
-  setMode: (mode: Mode) => void
   updateUI: (value: Partial<UI>) => void
   setCatalog: (models: CatalogModel[], status: 'live' | 'offline') => void
   addSlot: () => void
   removeSlot: (id: number) => void
   focusSlot: (id: number) => void
-  assign: (role: 'actor' | 'motion', model: string) => void
+  assign: (role: AssignmentTarget, model: string) => void
   swap: () => void
   registerFile: (file: File) => string
   openLocal: (file: File) => void
@@ -221,14 +219,25 @@ function stageDuration(slots: Slot[], runtime: StudioState['runtime'], chain: bo
     ),
   )
 }
-function resizeTime(timeline: Timeline, duration: number): Timeline {
-  return duration === timeline.duration
-    ? timeline
-    : {
-        ...timeline,
-        duration,
-        time: Math.max(timeline.trimStart * duration, Math.min(timeline.time, timeline.trimEnd * duration)),
-      }
+function clampTrim(t: Timeline, fps: number, movingStart: boolean) {
+  const gap = t.duration > 0 ? Math.min(1, 1 / (fps * t.duration)) : 0
+  t.trimStart = Math.max(0, Math.min(1 - gap, t.trimStart))
+  t.trimEnd = Math.max(gap, Math.min(1, t.trimEnd))
+  if (movingStart) t.trimStart = Math.min(t.trimStart, t.trimEnd - gap)
+  else t.trimEnd = Math.max(t.trimEnd, t.trimStart + gap)
+}
+function resizeTime(timeline: Timeline, duration: number, fps: number): Timeline {
+  const next = { ...timeline, duration }
+  clampTrim(next, fps, false)
+  if (
+    duration === timeline.duration &&
+    next.trimStart === timeline.trimStart &&
+    next.trimEnd === timeline.trimEnd
+  )
+    return timeline
+  next.time = Math.max(next.trimStart * duration, Math.min(next.time, next.trimEnd * duration))
+  next.seekRevision++
+  return next
 }
 function resetTime(timeline: Timeline, duration: number): Timeline {
   return {
@@ -261,13 +270,13 @@ export const useStudioStore = create<StudioState>((set, get) => {
   return {
     language: firstLanguage,
     theme: readPreference('theme') === 'dark' ? 'dark' : 'light',
-    mode: 'solo',
+    recentPicks: [],
     ui: {
       left: 'characters',
-      right: 'stage',
+      right: 'adjust',
       leftOpen: !mobile,
       rightOpen: !mobile,
-      presets: false,
+      target: 'actor',
       skeleton: false,
       gizmo: 'off',
     },
@@ -314,34 +323,10 @@ export const useStudioStore = create<StudioState>((set, get) => {
         ...(transform.rotation ? { yaw: (transform.rotation[1] * Math.PI) / 180 } : {}),
       })
     },
-    showcaseSolo(actor, motion, clip, combat) {
-      const s = get(),
-        slot = createSlot(1, actor)
-      slot.motion = motion
-      slot.clip = clip
-      slot.rig.rootMode = combat ? 'ground-scaled' : 'prop-locked'
-      if (combat) {
-        slot.rig.spring.enabled = true
-        slot.weapon = { ...slot.weapon, source: 'motionB', donor: 'Azusa' }
-      } else slot.weapon.source = 'hidden'
-      set({
-        mode: combat ? 'solo' : 'propMode',
-        slots: [slot],
-        activeId: 1,
-        runtime: {},
-        props: [],
-        selectedProp: null,
-        joint: { comboId: null, chain: false, members: [] },
-        timeline: resetTime({ ...s.timeline, playing: true, loop: true, speed: 1, chainStartEnd: false }, 0),
-        camera: { preset: combat ? 'threeQuarter' : 'front', revision: s.camera.revision + 1 },
-        ui: { ...s.ui, right: 'props', left: combat ? 'characters' : 'props', presets: false },
-      })
-    },
-    loadFormation(combo, clips, cast) {
+    loadFormation(combo, clips) {
       const slots = combo.members.map((m, i) => {
         const slot = createSlot(i + 1, m.model.slice(0, -4))
         if (combo.id === 'toramaru' && i === 1) slot.socket = { slotId: 1, bone: 'St_point', pitch: 90 }
-        if (cast) slot.actor = cast[i]
         slot.clip = m.start
         slot.endClip = m.end
         slot.externalClips = clips[i] ?? []
@@ -353,24 +338,15 @@ export const useStudioStore = create<StudioState>((set, get) => {
         return slot
       })
       const s = get()
-      const props = cast ? [] : s.props.filter((p) => p.slotId === null)
+      const props = s.props.filter((p) => p.slotId === null)
       set({
         slots,
-        ...(cast
-          ? {
-              mode: 'jointVictory' as const,
-              ui: { ...s.ui, left: 'joint' as const, right: 'props' as const, presets: false },
-            }
-          : {}),
         runtime: {},
         activeId: 1,
         selectedProp: null,
         props,
         camera: { preset: 'group', revision: s.camera.revision + 1 },
-        timeline: resetTime(
-          { ...s.timeline, ...(cast ? { playing: true, speed: 1, loop: true } : {}), chainStartEnd: true },
-          stageDuration(slots, {}, true, props),
-        ),
+        timeline: resetTime({ ...s.timeline, chainStartEnd: true }, stageDuration(slots, {}, true, props)),
         joint: {
           comboId: combo.id,
           chain: true,
@@ -399,7 +375,7 @@ export const useStudioStore = create<StudioState>((set, get) => {
       chainStartEnd: false,
       seekRevision: 0,
     },
-    viewport: { width: 1280, height: 800, dpr: 1, safe: { x: 320, y: 126, width: 640, height: 584 } },
+    viewport: { width: 1280, height: 800, dpr: 1, safe: { x: 320, y: 76, width: 640, height: 634 } },
     exportSettings: {
       aspect: '1:1',
       resolution: 'original',
@@ -418,17 +394,6 @@ export const useStudioStore = create<StudioState>((set, get) => {
       const theme = get().theme === 'light' ? 'dark' : 'light'
       savePreference('theme', theme)
       set({ theme })
-    },
-    setMode(mode) {
-      set((s) => ({
-        mode,
-        ui: {
-          ...s.ui,
-          leftOpen: true,
-          ...(window.innerWidth <= 900 ? { rightOpen: false } : {}),
-          left: mode === 'solo' ? 'characters' : mode === 'jointVictory' ? 'joint' : 'props',
-        },
-      }))
     },
     updateUI: (value) =>
       set((s) => {
@@ -479,6 +444,7 @@ export const useStudioStore = create<StudioState>((set, get) => {
       if (s.slots.some((slot) => slot.id === id)) set({ activeId: id, selectedProp: null })
     },
     assign(role, model) {
+      set((s) => ({ recentPicks: [model, ...s.recentPicks.filter((id) => id !== model)].slice(0, 5) }))
       const slot = get().slots.find((s) => s.id === get().activeId)!
       if (role === 'actor') return get().castActor(slot.id, model)
       if (slot[role] !== model)
@@ -561,7 +527,11 @@ export const useStudioStore = create<StudioState>((set, get) => {
           runtime,
           timeline:
             data.clips && data.status !== 'loading'
-              ? resizeTime(s.timeline, stageDuration(slots, runtime, s.timeline.chainStartEnd, s.props))
+              ? resizeTime(
+                  s.timeline,
+                  stageDuration(slots, runtime, s.timeline.chainStartEnd, s.props),
+                  s.exportSettings.fps,
+                )
               : s.timeline,
         }
       })
@@ -577,13 +547,7 @@ export const useStudioStore = create<StudioState>((set, get) => {
             timeline: resetTime(next, stageDuration(s.slots, s.runtime, next.chainStartEnd, s.props)),
           }
         const trimming = update.trimStart !== undefined || update.trimEnd !== undefined
-        if (trimming) {
-          const gap = next.duration ? Math.min(1, 1 / (s.exportSettings.fps * next.duration)) : 0
-          next.trimStart = Math.max(0, Math.min(1 - gap, next.trimStart))
-          next.trimEnd = Math.max(gap, Math.min(1, next.trimEnd))
-          if (update.trimStart !== undefined) next.trimStart = Math.min(next.trimStart, next.trimEnd - gap)
-          else next.trimEnd = Math.max(next.trimEnd, next.trimStart + gap)
-        }
+        if (trimming) clampTrim(next, s.exportSettings.fps, update.trimStart !== undefined)
         next.time = Math.max(
           next.trimStart * next.duration,
           Math.min(next.trimEnd * next.duration, next.time),
@@ -621,6 +585,7 @@ export const useStudioStore = create<StudioState>((set, get) => {
           timeline: resizeTime(
             s.timeline,
             stageDuration(s.slots, s.runtime, s.timeline.chainStartEnd, props),
+            s.exportSettings.fps,
           ),
         }
       }),
@@ -633,6 +598,7 @@ export const useStudioStore = create<StudioState>((set, get) => {
           timeline: resizeTime(
             s.timeline,
             stageDuration(s.slots, s.runtime, s.timeline.chainStartEnd, props),
+            s.exportSettings.fps,
           ),
         }
       }),
@@ -644,6 +610,9 @@ export const useStudioStore = create<StudioState>((set, get) => {
           (exportSettings.showViewfinder && !s.exportSettings.showViewfinder)
         return {
           exportSettings,
+          ...(exportSettings.fps !== s.exportSettings.fps && {
+            timeline: resizeTime(s.timeline, s.timeline.duration, exportSettings.fps),
+          }),
           ...(refit && { camera: { preset: 'fitCrop', revision: s.camera.revision + 1 } }),
         }
       }),

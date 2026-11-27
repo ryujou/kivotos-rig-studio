@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { meshLabel } from '../i18n/meshLabels'
-import { Armchair, PackagePlus, Search } from 'lucide-react'
+import { Armchair, PackagePlus, Paperclip, Search } from 'lucide-react'
 import { propModels, type PropCategory, type PropModel } from '../data/propModels'
 import { newProp } from '../engine/PropTypes'
 import {
@@ -14,7 +14,7 @@ import { normalizeSearch } from '../services/wikiCatalog'
 import { useActiveSlot, useStudioStore, useText } from '../store/useStudioStore'
 import type { MessageKey } from '../i18n'
 import { BoneSelect, DropFiles, ModelSelect } from './InteractionControls'
-import { useModelLabel } from './shared'
+import { IconButton, useModelLabel } from './shared'
 
 function PackImport() {
   const t = useText(),
@@ -102,7 +102,7 @@ function borrow(id: string, subset: string, clip = '', slotId: number | null = n
   prop.bone = bone
   s.upsertProp(prop)
   s.selectProp(prop.id)
-  s.updateUI({ right: 'props', rightOpen: typeof window === 'undefined' || window.innerWidth > 900 })
+  s.updateUI({ right: 'adjust', rightOpen: typeof window === 'undefined' || window.innerWidth > 900 })
 }
 function PropRow({ model }: { model: PropModel }) {
   const t = useText(),
@@ -128,23 +128,27 @@ function PropRow({ model }: { model: PropModel }) {
     <article className="asset-row prop-row">
       <b>{label(model.id)}</b>
       <small>{model.tags.map((tag) => t(tag)).join(' · ')}</small>
-      <select
-        aria-label={t('meshGroup') + ' · ' + label(model.id)}
-        value={selection}
-        onChange={(e) => setSelection(e.target.value)}
-      >
-        {model.meshes.map((mesh, i) => (
-          <option key={mesh} value={mesh}>
-            {meshLabel(mesh, i, t)} · {mesh}
-          </option>
-        ))}
-        <option value="weapon">{t('weapon')}</option>
-      </select>
+      {model.meshes.length > 1 && (
+        <select
+          aria-label={t('meshGroup') + ' · ' + label(model.id)}
+          value={selection}
+          onChange={(e) => setSelection(e.target.value)}
+        >
+          {model.meshes.map((mesh, i) => (
+            <option key={mesh} value={mesh}>
+              {meshLabel(mesh, i, t)} · {mesh}
+            </option>
+          ))}
+        </select>
+      )}
       <div className="asset-actions">
         <button onClick={useMotion}>{t('loadMotionProp')}</button>
-        <button onClick={() => borrow(model.id, selection, selection === 'weapon' ? '' : model.clip)}>
-          {t('mountOnly')}
-        </button>
+        <IconButton
+          label={t('mountOnly') + ' · ' + label(model.id)}
+          onClick={() => borrow(model.id, selection, model.clip)}
+        >
+          <Paperclip size={14} />
+        </IconButton>
       </div>
     </article>
   )
@@ -184,8 +188,8 @@ function DonorBrowser() {
     }
   }
   return (
-    <details className="url-setting">
-      <summary>{t('anyDonor')}</summary>
+    <section>
+      <h3 className="work-heading">{t('anyDonor')}</h3>
       <ModelSelect
         label={t('donorModel')}
         value={id}
@@ -221,7 +225,7 @@ function DonorBrowser() {
       >
         {t('mountOnly')}
       </button>
-    </details>
+    </section>
   )
 }
 export function PropLibrary() {
@@ -229,9 +233,6 @@ export function PropLibrary() {
     models = useStudioStore((s) => s.models)
   const [category, setCategory] = useState<PropCategory | 'all'>('all'),
     [query, setQuery] = useState('')
-  const mounted = useStudioStore((s) => s.props),
-    selected = useStudioStore((s) => s.selectedProp),
-    label = useModelLabel()
   const search = new Map(models.map((m) => [m.id, m.search]))
   const terms = normalizeSearch(query).split(' ').filter(Boolean)
   const list = propModels.filter(
@@ -245,24 +246,11 @@ export function PropLibrary() {
   )
   return (
     <div className="work-scroll">
-      <PackImport />
-      {mounted.length > 0 && (
-        <section>
-          <h3 className="work-heading">{t('mounted')}</h3>
-          <div className="chips wrapped">
-            {mounted.map((p) => (
-              <button
-                key={p.id}
-                aria-pressed={selected === p.id}
-                onClick={() => useStudioStore.getState().selectProp(p.id)}
-              >
-                {p.name || label(p.modelId)}
-              </button>
-            ))}
-          </div>
-        </section>
-      )}
-      <DonorBrowser />
+      <details className="disclosure">
+        <summary>{t('importBorrow')}</summary>
+        <PackImport />
+        <DonorBrowser />
+      </details>
       <h3 className="work-heading">
         <PackagePlus size={15} />
         {t('propLibrary')}

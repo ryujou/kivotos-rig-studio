@@ -1,46 +1,52 @@
 import { JointLibrary } from './JointLibrary'
 import { PropLibrary } from './PropLibrary'
-import { SceneOutliner } from './PropInspector'
 import {
   Archive,
-  Check,
+  History,
   ChevronDown,
   ChevronUp,
   Clapperboard,
-  FilePlus2,
+  Plus,
   Link2,
   PanelLeftClose,
   PanelLeftOpen,
   Search,
-  SlidersHorizontal,
+  X,
 } from 'lucide-react'
-import { memo, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { translate, type Language } from '../i18n'
-import { normalizeSearch, variantLabel, modelLabel, type CatalogModel } from '../services/wikiCatalog'
-import { useStudioStore, useText, useActiveSlot } from '../store/useStudioStore'
-import { variantNames } from '../i18n/variants'
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from 'react'
+import type { Language } from '../i18n'
+import { filterCharacters, variantLabel, modelLabel, type CatalogModel } from '../services/wikiCatalog'
+import { useStudioStore, useText, useActiveSlot, type AssignmentTarget } from '../store/useStudioStore'
+import { schoolNames, schoolLabels, type School } from '../i18n/schools'
 import { clipSequence, sequenceDuration, type ClipCategory } from '../engine/AnimationUtils'
-import { IconButton, Portrait, Tabs } from './shared'
+import { IconButton, Portrait, Tabs, useModelLabel } from './shared'
 
-const featuredTags = ['Default', 'Swimsuit', 'Dress', 'Band', 'Maid', 'Hot Spring']
+const featuredTags = ['Default', 'Swimsuit', 'Dress', 'Band', 'Maid']
 const CharacterCard = memo(function CharacterCard({
   model,
   actor,
   motion,
+  target,
   lang,
 }: {
   model: CatalogModel
+  target: AssignmentTarget
   actor: boolean
   motion: boolean
   lang: Language
 }) {
   const assign = useStudioStore.getState().assign
-  const actorLabel = translate(lang, 'actor'),
-    motionLabel = translate(lang, 'motion')
   const outfit = model.tags.map((tag) => variantLabel(tag, lang)).join(' / ')
   return (
-    <article className={'character-card' + (actor ? ' assigned' : '')} title={modelLabel(model, lang)}>
-      <div
+    <button
+      type="button"
+      className={'character-card' + (actor || motion ? ' assigned' : '')}
+      aria-label={modelLabel(model, lang)}
+      aria-pressed={target === 'actor' ? actor : motion}
+      title={modelLabel(model, lang)}
+      onClick={() => assign(target, model.id)}
+    >
+      <span
         className="card-art"
         style={{ '--hue': String(195 + (model.student.charCodeAt(0) % 14) * 9) } as CSSProperties}
       >
@@ -52,33 +58,15 @@ const CharacterCard = memo(function CharacterCard({
             {motion && 'B'}
           </span>
         )}
-      </div>
-      <div className="card-identity">
+      </span>
+      <span className="card-identity">
         <strong>{model.names[lang]}</strong>
         <small title={model.student + ' · ' + outfit}>
           {lang !== 'en' && model.student + ' · '}
           {outfit}
         </small>
-      </div>
-      <div className="assign-buttons">
-        <button
-          title={actorLabel + ' · ' + modelLabel(model, lang)}
-          aria-pressed={actor}
-          onClick={() => assign('actor', model.id)}
-        >
-          {actor && <Check size={10} />}
-          {actorLabel}
-        </button>
-        <button
-          title={motionLabel + ' · ' + modelLabel(model, lang)}
-          aria-pressed={motion}
-          onClick={() => assign('motion', model.id)}
-        >
-          {motion && <Check size={10} />}
-          {motionLabel}
-        </button>
-      </div>
-    </article>
+      </span>
+    </button>
   )
 })
 function ClipPicker() {
@@ -118,12 +106,33 @@ function ClipPicker() {
     filtered = clips.filter((c) => filter === 'all' || c.category === filter)
   return (
     <section className={'clip-picker' + (open ? ' open' : '')}>
-      <button className="section-heading clip-heading" onClick={() => setOpen(!open)} aria-expanded={open}>
-        <Clapperboard size={16} />
-        <b>{t('clips')}</b>
-        <span className="counter">{clips.length}</span>
-        {open ? <ChevronDown size={15} /> : <ChevronUp size={15} />}
-      </button>
+      <div className="clip-header">
+        <button className="section-heading clip-heading" onClick={() => setOpen(!open)} aria-expanded={open}>
+          <Clapperboard size={16} />
+          <b>{t('clips')}</b>
+          <span className="counter">{clips.length}</span>
+          {open ? <ChevronDown size={15} /> : <ChevronUp size={15} />}
+        </button>
+        <IconButton
+          label={t(importing ? 'loadingClips' : 'importClips')}
+          disabled={importing}
+          onClick={() => file.current?.click()}
+        >
+          <Plus size={15} />
+        </IconButton>
+      </div>
+      <input
+        hidden
+        ref={file}
+        type="file"
+        accept=".glb"
+        onChange={(e) => {
+          const input = e.target.files?.[0]
+          if (input) void importMotion(input)
+          e.target.value = ''
+        }}
+      />
+      {importError && <small role="alert">{t('importError')}</small>}
       {open && (
         <>
           <div className="chips clip-chips scroll-chips" aria-label={t('clipFilter')}>
@@ -134,29 +143,6 @@ function ClipPicker() {
                 </button>
               ),
             )}
-          </div>
-          <div className="clip-import">
-            <button
-              className="rig-reset"
-              disabled={importing}
-              aria-busy={importing}
-              onClick={() => file.current?.click()}
-            >
-              <FilePlus2 size={12} />
-              {t(importing ? 'loadingClips' : 'importClips')}
-            </button>
-            <input
-              hidden
-              ref={file}
-              type="file"
-              accept=".glb"
-              onChange={(e) => {
-                const input = e.target.files?.[0]
-                if (input) void importMotion(input)
-                e.target.value = ''
-              }}
-            />
-            {importError && <small role="alert">{t('importError')}</small>}
           </div>
           <div className="clip-list">
             {filtered.map((c) => {
@@ -189,7 +175,7 @@ function ClipPicker() {
     </section>
   )
 }
-function Characters() {
+function Characters({ input }: { input: RefObject<HTMLInputElement | null> }) {
   const t = useText(),
     slot = useActiveSlot(),
     models = useStudioStore((s) => s.models),
@@ -197,54 +183,109 @@ function Characters() {
   const [search, setSearch] = useState(''),
     [tag, setTag] = useState('all'),
     [more, setMore] = useState(false)
-  const tags = useMemo(
+  const [school, setSchool] = useState<School | 'all'>('all')
+  const target = useStudioStore((s) => s.ui.target)
+  const recent = useStudioStore((s) => s.recentPicks)
+  const label = useModelLabel()
+  const list = useRef<HTMLDivElement>(null)
+  const extraTags = useMemo(
     () => Array.from(new Set(models.flatMap((m) => m.tags))).filter((v) => !featuredTags.includes(v)),
     [models],
   )
-  const filtered = useMemo(() => {
-    const terms = normalizeSearch(search).split(' ').filter(Boolean)
-    return models.filter(
-      (m) =>
-        (tag === 'all' || (tag === 'vehiclesProps' ? m.hasProps : m.tags.includes(tag))) &&
-        terms.every((term) => m.search.includes(term)),
+  const filtered = useMemo(() => filterCharacters(models, search, school, tag), [models, search, school, tag])
+  useEffect(() => {
+    if (list.current) list.current.scrollTop = 0
+  }, [search, school, tag])
+  function chip(key: string) {
+    return (
+      <button key={key} aria-pressed={tag === key} onClick={() => setTag(key)}>
+        {key === 'all' || key === 'hasProps' ? t(key) : variantLabel(key, lang)}
+      </button>
     )
-  }, [models, search, tag])
+  }
   return (
     <div className="character-pane">
       <div className="browser-controls">
+        <div className="target-switch">
+          {(['actor', 'motion'] as const).map((role) => (
+            <button
+              key={role}
+              aria-pressed={target === role}
+              title={label(slot[role])}
+              onClick={() => useStudioStore.getState().updateUI({ target: role })}
+            >
+              <b>{t(role)}</b>
+              <span>{label(slot[role])}</span>
+            </button>
+          ))}
+        </div>
         <div className="search-field">
-          <Search size={16} />
+          <Search size={15} />
           <input
+            ref={input}
             type="search"
             value={search}
             placeholder={t('search')}
             aria-label={t('search')}
+            aria-keyshortcuts="/"
             onChange={(e) => setSearch(e.target.value)}
           />
-          <IconButton label={t('filters')} aria-expanded={more} onClick={() => setMore(!more)}>
-            <SlidersHorizontal size={15} />
-          </IconButton>
+          {search ? (
+            <IconButton
+              label={t('clearSearch')}
+              onClick={() => {
+                setSearch('')
+                input.current?.focus()
+              }}
+            >
+              <X size={13} />
+            </IconButton>
+          ) : (
+            <kbd>/</kbd>
+          )}
         </div>
-        <div className={'chips variant-chips' + (more ? ' wrapped' : ' scroll-chips')}>
-          {[
-            'all',
-            ...featuredTags,
-            'vehiclesProps',
-            ...(more ? tags : !featuredTags.includes(tag) && variantNames[tag] ? [tag] : []),
-          ].map((k) => (
-            <button key={k} aria-pressed={tag === k} onClick={() => setTag(k)}>
-              {k === 'all' || k === 'vehiclesProps' ? t(k) : variantLabel(k, lang)}
-            </button>
-          ))}
+        <label className="school-select">
+          {t('school')}
+          <select value={school} onChange={(e) => setSchool(e.target.value as School | 'all')}>
+            <option value="all">{t('allSchools')}</option>
+            {(Object.keys(schoolNames) as School[]).map((key) => (
+              <option key={key} value={key} title={schoolNames[key][lang]}>
+                {schoolLabels[key][lang]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="quick-filters">
+          <div className="chips scroll-chips">{['all', ...featuredTags, 'hasProps'].map(chip)}</div>
+          <button className="more-filter" aria-expanded={more} onClick={() => setMore(!more)}>
+            {!more && extraTags.includes(tag) ? variantLabel(tag, lang) : t('more')} <ChevronDown size={11} />
+          </button>
         </div>
+        {more && <div className="chips extra-tags">{extraTags.map(chip)}</div>}
+        {recent.length > 0 && (
+          <div className="recent-picks" role="group" aria-label={t('recent')}>
+            <History size={14} aria-hidden="true" />
+            {recent.map((id) => (
+              <button
+                key={id}
+                title={label(id)}
+                aria-label={label(id)}
+                onClick={() => useStudioStore.getState().assign(target, id)}
+              >
+                <Portrait id={id} />
+              </button>
+            ))}
+          </div>
+        )}
       </div>
-      <div className="card-scroll">
+      <div className="card-scroll" ref={list}>
         <div className="cards">
           {filtered.map((m) => (
             <CharacterCard
               key={m.id}
               lang={lang}
               model={m}
+              target={target}
               actor={slot.actor === m.id}
               motion={slot.motion === m.id}
             />
@@ -261,6 +302,34 @@ export function LeftDrawer() {
     ui = useStudioStore((s) => s.ui),
     setUI = useStudioStore((s) => s.updateUI)
   const count = useStudioStore((s) => s.models.length)
+  const input = useRef<HTMLInputElement>(null)
+  const [focusRequest, setFocusRequest] = useState(0)
+  useEffect(() => {
+    const shortcut = (e: KeyboardEvent) => {
+      if (
+        e.defaultPrevented ||
+        e.key !== '/' ||
+        e.metaKey ||
+        e.ctrlKey ||
+        e.altKey ||
+        e.isComposing ||
+        (e.target instanceof HTMLElement &&
+          (e.target.isContentEditable || e.target.closest('input, textarea, select, dialog')))
+      )
+        return
+      e.preventDefault()
+      setUI({ left: 'characters', leftOpen: true, ...(window.innerWidth <= 900 && { rightOpen: false }) })
+      setFocusRequest((n) => n + 1)
+    }
+    window.addEventListener('keydown', shortcut)
+    return () => window.removeEventListener('keydown', shortcut)
+  }, [setUI])
+  useEffect(() => {
+    if (focusRequest) {
+      input.current?.focus()
+      input.current?.select()
+    }
+  }, [focusRequest])
   if (!ui.leftOpen)
     return (
       <IconButton
@@ -284,15 +353,14 @@ export function LeftDrawer() {
         </IconButton>
       </div>
       <Tabs
-        keys={['characters', 'joint', 'props', 'scene'] as const}
+        keys={['characters', 'joint', 'props'] as const}
         value={ui.left}
         onChange={(left) => setUI({ left })}
         label={t('library')}
       />
-      {ui.left === 'characters' && <Characters />}
+      {ui.left === 'characters' && <Characters input={input} />}
       {ui.left === 'joint' && <JointLibrary />}
       {ui.left === 'props' && <PropLibrary />}
-      {ui.left === 'scene' && <SceneOutliner />}
     </aside>
   )
 }

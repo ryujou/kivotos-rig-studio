@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChevronRight, UsersRound, FileUp } from 'lucide-react'
 import { jointCombos, type JointCombo } from '../data/jointCombos'
-import { jointSlug, loadJoint } from '../services/jointLoader'
+import { jointErrorMessage, jointSlug, loadJoint } from '../services/jointLoader'
 import { useStudioStore, useText } from '../store/useStudioStore'
 import { CastSelect, DropFiles } from './InteractionControls'
 import { useModelLabel } from './shared'
@@ -15,37 +15,79 @@ export function JointLibrary() {
   const base = useStudioStore((s) => s.proxyBase)
   const [selected, setSelected] = useState(joint.comboId),
     [busy, setBusy] = useState(false),
-    [error, setError] = useState(false)
+    [error, setError] = useState<ReturnType<typeof jointErrorMessage> | null>(null)
   const [files, setFiles] = useState(new Map<string, File>())
+  const selectedOfficial = jointCombos.find((combo) => !combo.native && combo.id === selected)
   const revision = useRef(0)
   useEffect(() => {
     setSelected(joint.comboId)
-    setError(false)
+    setError(null)
   }, [joint.comboId])
   async function open(combo: JointCombo, local = files) {
     const request = ++revision.current
     setSelected(combo.id)
-    setError(false)
+    setError(null)
     setBusy(true)
     try {
       await loadJoint(combo, local)
-    } catch {
-      if (request === revision.current) setError(true)
+    } catch (cause) {
+      if (request === revision.current) setError(jointErrorMessage(cause))
     } finally {
       if (request === revision.current) setBusy(false)
     }
   }
   return (
     <div className="work-scroll">
-      <details className="url-setting">
-        <summary>{t('proxyUrl')}</summary>
-        <input
-          type="url"
-          value={base}
-          placeholder="/api/joint/"
-          aria-label={t('proxyUrl')}
-          onChange={(e) => useStudioStore.getState().setUrl('proxyBase', e.target.value)}
+      <details className="disclosure offline-settings">
+        <summary>
+          {t('offlineProxy')}
+          {files.size > 0 && <span className="counter">{files.size}</span>}
+        </summary>
+        <label className="rig-select">
+          {t('proxyUrl')}
+          <input
+            type="url"
+            value={base}
+            placeholder="https://…/api/joint/"
+            onChange={(e) => useStudioStore.getState().setUrl('proxyBase', e.target.value)}
+          />
+        </label>
+        <DropFiles
+          text={t('jointDrop')}
+          accept=".joint.br,.glb"
+          load={(batch) => {
+            const next = new Map(files)
+            for (const file of batch) next.set(jointSlug(file.name), file)
+            setFiles(next)
+            const combo =
+              selectedOfficial ??
+              jointCombos.find((c) => !c.native && c.members.every((m) => next.has(jointSlug(m.model))))
+            if (combo) void open(combo, next)
+          }}
         />
+        {selectedOfficial?.members.map((m) => {
+          const slug = jointSlug(m.model)
+          return (
+            <label className="member-file" key={slug}>
+              <FileUp size={14} />
+              {files.get(slug)?.name ?? label(m.model.slice(0, -4))}
+              <input
+                type="file"
+                accept=".joint.br,.glb"
+                aria-label={t('jointFiles') + ' · ' + label(m.model.slice(0, -4))}
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (!file) return
+                  const next = new Map(files).set(slug, file)
+                  setFiles(next)
+                  e.target.value = ''
+                  if (selectedOfficial.members.every((member) => next.has(jointSlug(member.model))))
+                    void open(selectedOfficial, next)
+                }}
+              />
+            </label>
+          )
+        })}
       </details>
       {[true, false].map((native) => (
         <section key={String(native)}>
@@ -65,10 +107,9 @@ export function JointLibrary() {
                 {selected === combo.id && (
                   <div className="asset-detail">
                     {busy && <small role="status">{t('loadingClips')}</small>}
-                    {error && <p role="alert">{t('jointFailed')}</p>}
+                    {error && <p role="alert">{t(error)}</p>}
                     {combo.members.map((m, i) => {
                       const slot = joint.comboId === combo.id ? slots.find((s) => s.id === i + 1) : undefined
-                      const slug = jointSlug(m.model)
                       return (
                         <div className="member-row" key={m.model}>
                           <div>
@@ -77,40 +118,9 @@ export function JointLibrary() {
                             </small>
                             {slot && <CastSelect slot={slot} />}
                           </div>
-                          {!native && (
-                            <label className="file-icon" title={files.get(slug)?.name ?? t('jointFiles')}>
-                              <FileUp size={15} />
-                              <input
-                                type="file"
-                                aria-label={t('jointFiles') + ' · ' + label(m.model.slice(0, -4))}
-                                accept=".joint.br,.glb"
-                                onChange={(e) => {
-                                  const file = e.target.files?.[0]
-                                  if (!file) return
-                                  const next = new Map(files).set(slug, file)
-                                  setFiles(next)
-                                  e.target.value = ''
-                                  if (combo.members.every((member) => next.has(jointSlug(member.model))))
-                                    void open(combo, next)
-                                }}
-                              />
-                            </label>
-                          )}
                         </div>
                       )
                     })}
-                    {!native && (
-                      <DropFiles
-                        text={t('jointDrop')}
-                        accept=".joint.br,.glb"
-                        load={(batch) => {
-                          const next = new Map(files)
-                          for (const f of batch) next.set(jointSlug(f.name), f)
-                          setFiles(next)
-                          void open(combo, next)
-                        }}
-                      />
-                    )}
                   </div>
                 )}
               </article>

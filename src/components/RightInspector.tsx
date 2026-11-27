@@ -1,9 +1,7 @@
 import {
-  Axis3d,
   Box,
   Camera,
   CircleDot,
-  Database,
   Focus,
   Grid2x2,
   Layers,
@@ -14,7 +12,6 @@ import {
   SlidersHorizontal,
   Sun,
   Trash2,
-  UsersRound,
 } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import {
@@ -24,12 +21,11 @@ import {
   onCacheChange,
   type CacheStats,
 } from '../services/modelCache'
-import { useActiveSlot, useStudioStore, useText, type CameraPreset } from '../store/useStudioStore'
+import { useActiveSlot, useStudioStore, useText } from '../store/useStudioStore'
 import { IconButton, Tabs, Toggle } from './shared'
 
 import { ExportInspector } from './ExportInspector'
-import { PropInspector } from './PropInspector'
-import { RiggingInspector } from './RiggingInspector'
+import { AdjustInspector } from './AdjustInspector'
 
 function Section({ title, icon, children }: { title: string; icon: ReactNode; children: ReactNode }) {
   return (
@@ -79,7 +75,11 @@ function CacheSection() {
     }
   }
   return (
-    <Section title={t('cache')} icon={<Database />}>
+    <details className="disclosure">
+      <summary>
+        {t('cache')}
+        {stats && <small>{(stats.bytes / 1048576).toFixed(1)} MiB</small>}
+      </summary>
       <div className="cache-summary">
         <span>IndexedDB</span>
         <code>
@@ -93,16 +93,14 @@ function CacheSection() {
         <Trash2 size={13} />
         {t(busy ? 'cacheBusy' : 'clearCache')}
       </button>
-    </Section>
+    </details>
   )
 }
 const cameras = [
   { key: 'front', icon: PersonStanding },
   { key: 'threeQuarter', icon: Box },
-  { key: 'side', icon: Axis3d },
-  { key: 'back', icon: CircleDot },
   { key: 'face', icon: ScanFace },
-  { key: 'group', icon: UsersRound },
+  { key: 'reset', icon: Focus },
 ] as const
 function StageControls() {
   const t = useText(),
@@ -138,26 +136,28 @@ function StageControls() {
           checked={stage.outline}
           onChange={() => set({ outline: !stage.outline })}
         />
-        <div className="outline-details">
-          <label className="slider-row">
-            <span>{t('width')}</span>
-            <input
-              type="range"
-              min="0"
-              max="200"
-              value={stage.width}
-              onChange={(e) => set({ width: Number(e.target.value) })}
-            />
-            <code>{stage.width}%</code>
-          </label>
-          <label className="color-row">
-            <span>{t('color')}</span>
-            <span className="hex-color">
-              <input type="color" value={stage.color} onChange={(e) => set({ color: e.target.value })} />
-              <code>{stage.color.toUpperCase()}</code>
-            </span>
-          </label>
-        </div>
+        {stage.outline && (
+          <div className="outline-details">
+            <label className="slider-row">
+              <span>{t('width')}</span>
+              <input
+                type="range"
+                min="0"
+                max="200"
+                value={stage.width}
+                onChange={(e) => set({ width: Number(e.target.value) })}
+              />
+              <code>{stage.width}%</code>
+            </label>
+            <label className="color-row">
+              <span>{t('color')}</span>
+              <span className="hex-color">
+                <input type="color" value={stage.color} onChange={(e) => set({ color: e.target.value })} />
+                <code>{stage.color.toUpperCase()}</code>
+              </span>
+            </label>
+          </div>
+        )}
       </Section>
       <Section title={t('environment')} icon={<Sun />}>
         <label className="select-row">
@@ -193,21 +193,12 @@ function StageControls() {
       <Section title={t('camera')} icon={<Camera />}>
         <div className="camera-options">
           {cameras.map(({ key, icon: Icon }) => (
-            <button
-              key={key}
-              aria-pressed={camera === key}
-              title={t(key)}
-              onClick={() => frame(key as CameraPreset)}
-            >
+            <button key={key} aria-pressed={camera === key} title={t(key)} onClick={() => frame(key)}>
               <Icon size={14} />
               {t(key)}
             </button>
           ))}
         </div>
-        <button className="frame-button" onClick={() => frame('reset')}>
-          <Focus size={14} />
-          {t('reset')}
-        </button>
       </Section>
       <CacheSection />
     </div>
@@ -244,15 +235,14 @@ export function RightInspector() {
         </IconButton>
       </div>
       <Tabs
-        keys={['props', 'rigging', 'stage', 'export'] as const}
+        keys={['adjust', 'stage', 'export'] as const}
         value={ui.right}
         onChange={(right) => set({ right })}
         label={t('inspector')}
       />
       {ui.right === 'stage' && <StageControls />}
       {ui.right === 'export' && <ExportInspector />}
-      {ui.right === 'props' && <PropInspector />}
-      {ui.right === 'rigging' && <RiggingInspector key={slot.id} />}
+      {ui.right === 'adjust' && <AdjustInspector />}
     </aside>
   )
 }

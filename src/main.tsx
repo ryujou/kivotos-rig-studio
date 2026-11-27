@@ -2,7 +2,6 @@ import { useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import { ExportModal } from './components/ExportModal'
 import { TopBar } from './components/TopBar'
-import { SlotStrip } from './components/SlotStrip'
 import { Viewport3D } from './components/Viewport3D'
 import { LeftDrawer } from './components/LeftDrawer'
 import { RightInspector } from './components/RightInspector'
@@ -10,6 +9,9 @@ import { TimelineDock } from './components/TimelineDock'
 import { useStudioStore } from './store/useStudioStore'
 import { loadWikiCatalog } from './services/wikiCatalog'
 import './index.css'
+
+const portraitAtlas = new URL(import.meta.env.BASE_URL + 'student-portraits.webp', document.baseURI)
+document.documentElement.style.setProperty('--portrait-atlas', `url("${portraitAtlas.href}")`)
 
 function Studio() {
   const theme = useStudioStore((s) => s.theme),
@@ -37,7 +39,6 @@ function Studio() {
     <main className="workspace" data-left={ui.leftOpen} data-right={ui.rightOpen}>
       <Viewport3D />
       <TopBar />
-      <SlotStrip />
       <LeftDrawer />
       <RightInspector />
       <TimelineDock />

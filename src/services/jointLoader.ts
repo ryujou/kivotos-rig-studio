@@ -58,15 +58,14 @@ async function jointClips(data: ArrayBuffer, start: string, end: string) {
   }
 }
 
-let pending: AbortController | undefined
-export function cancelJointLoad() {
-  pending?.abort()
+export function jointErrorMessage(error: unknown) {
+  return error instanceof Error && error.message === 'joint_proxy_unavailable'
+    ? 'proxyUnavailable'
+    : 'jointFailed'
 }
-export async function loadJoint(
-  combo: JointCombo,
-  local: ReadonlyMap<string, File> = new Map(),
-  cast?: readonly string[],
-) {
+
+let pending: AbortController | undefined
+export async function loadJoint(combo: JointCombo, local: ReadonlyMap<string, File> = new Map()) {
   pending?.abort()
   const controller = new AbortController()
   pending = controller
@@ -85,12 +84,19 @@ export async function loadJoint(
         if (!/^https?:$/.test(base.protocol)) throw new Error('invalid_proxy')
         if (base.pathname === '/') base.pathname = '/api/joint/'
         const url = new URL(slug + '.joint.br', base.href.replace(/\/?$/, '/')).href
-        const data = await fetchModelBuffer(url, undefined, controller.signal)
+        const data = await fetchModelBuffer(url, undefined, controller.signal).catch((error: unknown) => {
+          if (
+            error instanceof Error &&
+            ['model_http_404', 'model_http_405', 'invalid_glb'].includes(error.message)
+          )
+            throw new Error('joint_proxy_unavailable', { cause: error })
+          throw error
+        })
         return jointClips(data, member.start, member.end)
       }),
     )
     controller.signal.throwIfAborted()
-    useStudioStore.getState().loadFormation(combo, clips, cast)
+    useStudioStore.getState().loadFormation(combo, clips)
   } catch (error) {
     if (controller.signal.aborted) return
     controller.abort()
