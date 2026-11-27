@@ -1,0 +1,6 @@
+node_modules/
+dist/
+*.glb
+*.gltf
+*.joint.br
+.DS_Store

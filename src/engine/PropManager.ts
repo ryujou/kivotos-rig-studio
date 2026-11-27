@@ -1,0 +1,378 @@
+import { Box3, Group, Matrix4, Mesh, Object3D, Quaternion, SkinnedMesh, Vector3 } from 'three'
+import { useStudioStore as store, type Slot, type StageSettings } from '../store/useStudioStore'
+import { rigBones, ModelLoader, type StudioModel } from './ModelLoader'
+import { ClipPlayer } from './RetargetEngine'
+import { canonicalBoneName } from './RigDefinition'
+import type { MountedProp, Transform } from './PropTypes'
+
+const rad = Math.PI / 180
+export function applyTransform(object: Object3D, value: Transform) {
+  object.position.fromArray(value.position)
+  object.rotation.set(value.rotation[0] * rad, value.rotation[1] * rad, value.rotation[2] * rad)
+  object.scale.fromArray(value.scale)
+}
+export function readTransform(object: Object3D): Transform {
+  return {
+    position: object.position.toArray(),
+    scale: object.scale.toArray(),
+    rotation: [object.rotation.x / rad, object.rotation.y / rad, object.rotation.z / rad],
+  }
+}
+export function styleModel(model: StudioModel, stage: StageSettings) {
+  model.setShading(stage.shading)
+  model.outline.apply(stage.outline && stage.shading !== 'wireframe', stage.width, stage.color)
+}
+
+const bindings = new WeakMap<StudioModel, ReturnType<typeof indexModel>>()
+function indexModel(model: StudioModel) {
+  const bones = new Map(rigBones(model).map((b) => [canonicalBoneName(b.name), b]))
+  const grips = [...bones].filter(([key]) => /^bip001_weapon(?:_[rl])?$/.test(key)).map(([, node]) => node)
+  if (!bones.has('bip001') && model.weaponMeshes.length && !grips.length) grips.push(model.root)
+  if (!grips.length) {
+    for (const mesh of model.weaponMeshes) {
+      if (mesh instanceof SkinnedMesh) {
+        const joints = new Set(mesh.skeleton.bones)
+        for (const bone of joints) {
+          if (!mesh.skeleton.bones.some((parent) => parent.children.includes(bone)) && !grips.includes(bone))
+            grips.push(bone)
+        }
+      } else grips.push(mesh)
+    }
+  }
+  const groups = new Map<string, Mesh[]>()
+  for (const mesh of model.propMeshes) {
+    const name = model.meshGroups.get(mesh)!
+    if (!groups.has(name)) groups.set(name, [])
+    groups.get(name)!.push(mesh)
+  }
+  // Unweighted sockets (e.g. St_point) are ordinary glTF nodes, outside the humanoid rig.
+  const sockets = new Map(bones)
+  for (const node of model.rest.keys()) {
+    if (node.name && node.type === 'Object3D' && !sockets.has(canonicalBoneName(node.name)))
+      sockets.set(canonicalBoneName(node.name), node)
+  }
+  return { bones, grips, groups, sockets }
+}
+function binding(model: StudioModel) {
+  let data = bindings.get(model)
+  if (!data) {
+    data = indexModel(model)
+    bindings.set(model, data)
+  }
+  return data
+}
+export const attachmentNames = (model: StudioModel) => [...binding(model).sockets.values()].map((n) => n.name)
+export const propGroupNames = (model: StudioModel) => [...binding(model).groups.keys()]
+function isolate(model: StudioModel, subset: string) {
+  if (subset === 'whole') return
+  const keep = new Set(subset === 'weapon' ? model.weaponMeshes : binding(model).groups.get(subset))
+  if (!keep.size) throw new Error('missing_mesh_group')
+  for (const mesh of model.meshGroups.keys()) mesh.visible = keep.has(mesh)
+}
+
+// Presentation edits must be removed before either the mixer or the retargeter
+// samples the next pose. This also prevents offsets accumulating on paused frames.
+export class SlotProps {
+  private originals = new Map<Object3D, { position: Vector3; rotation: Quaternion; scale: Vector3 }>()
+  private scratch = new Matrix4()
+  private offset = new Matrix4()
+  private target = new Matrix4()
+  private transform = new Object3D()
+  constructor(
+    readonly actor: StudioModel,
+    readonly motion: StudioModel,
+  ) {}
+  restore() {
+    for (const [node, saved] of this.originals) {
+      node.position.copy(saved.position)
+      node.quaternion.copy(saved.rotation)
+      node.scale.copy(saved.scale)
+      node.updateWorldMatrix(true, true)
+    }
+    this.originals.clear()
+  }
+  apply(slot: Slot, donor?: StudioModel) {
+    const w = slot.weapon
+    for (const [name, meshes] of binding(this.motion).groups)
+      for (const mesh of meshes) mesh.visible = slot.embedded[name] !== false
+    const model =
+      w.source === 'actorA'
+        ? this.actor
+        : w.source === 'motionB'
+          ? this.motion
+          : w.source === 'donorC'
+            ? donor
+            : undefined
+    for (const entry of new Set([this.actor, this.motion, donor])) {
+      if (entry)
+        for (const mesh of entry.weaponMeshes)
+          mesh.visible = entry === model && (w.source !== 'actorA' || slot.rig.showActorWeapon)
+    }
+    if (!model) return
+    const motion = binding(this.motion),
+      actor = binding(this.actor)
+    const hand = actor.bones.get('bip001_r_hand')
+    this.transform.position.fromArray(w.position)
+    this.transform.rotation.set(...(w.rotation.map((v) => v * rad) as [number, number, number]))
+    this.transform.scale.setScalar(w.scale)
+    this.transform.updateMatrix()
+    this.offset.copy(this.transform.matrix)
+    for (const grip of binding(model).grips) {
+      const actorEdit =
+        w.source === 'actorA' &&
+        (slot.rig.mixer.weapon !== 'motionB' ||
+          slot.rig.mirror ||
+          slot.rig.overrides[grip.name] !== undefined)
+      const source =
+        w.attach === 'rightHand'
+          ? hand
+          : actorEdit
+            ? grip
+            : (motion.bones.get(canonicalBoneName(grip.name)) ?? motion.grips[0])
+      if (!source || !grip.parent) continue
+      if (source === grip && w.scale === 1 && w.position.every((v) => !v) && w.rotation.every((v) => !v))
+        continue
+      source.updateWorldMatrix(true, false)
+      grip.parent.updateWorldMatrix(true, false)
+      // Express slider translations in stage units, independent of the GLB's cm/m bind scale.
+      this.target.copy(source.matrixWorld)
+      const bindScale = (w.attach === 'rightHand' || actorEdit ? this.actor : this.motion).rest.get(
+        source,
+      )?.restWorldScale
+      this.offset.elements[12] = w.position[0] / (Math.abs(bindScale?.x ?? 1) || 1)
+      this.offset.elements[13] = w.position[1] / (Math.abs(bindScale?.y ?? 1) || 1)
+      this.offset.elements[14] = w.position[2] / (Math.abs(bindScale?.z ?? 1) || 1)
+      grip.updateMatrix()
+      this.originals.set(grip, {
+        position: grip.position.clone(),
+        rotation: grip.quaternion.clone(),
+        scale: grip.scale.clone(),
+      })
+      this.scratch.copy(grip.parent.matrixWorld).invert().multiply(this.target).multiply(this.offset)
+      if (this.scratch.determinant() === 0) {
+        grip.position.setFromMatrixPosition(this.scratch)
+        grip.scale.setScalar(0)
+      } else this.scratch.decompose(grip.position, grip.quaternion, grip.scale)
+      grip.updateWorldMatrix(false, true)
+    }
+  }
+}
+
+interface Item {
+  source: string | File
+  subset: string
+  anchor: Group
+  handle: Group
+  content: Group
+  controller: AbortController
+  model?: StudioModel
+  player?: ClipPlayer
+  lastStage?: StageSettings
+  pivot: Matrix4
+}
+export class PropManager {
+  private items = new Map<string, Item>()
+  constructor(
+    private scene: Object3D,
+    private loader: ModelLoader,
+    private onModelReady?: () => void,
+  ) {}
+  handle(id: string) {
+    return this.items.get(id)?.handle
+  }
+  donor(id: number) {
+    return this.items.get('donor:' + id)?.model
+  }
+  private drop(id: string) {
+    const item = this.items.get(id)
+    if (!item) return
+    item.controller.abort()
+    item.player?.dispose()
+    item.model?.dispose()
+    item.anchor.removeFromParent()
+    this.items.delete(id)
+  }
+  private ensure(id: string, source: string | File, subset: string, donorSlot?: number) {
+    let item = this.items.get(id)
+    if (item?.source === source && item.subset === subset) return item
+    this.drop(id)
+    item = {
+      source,
+      subset,
+      anchor: new Group(),
+      handle: new Group(),
+      content: new Group(),
+      controller: new AbortController(),
+      pivot: new Matrix4(),
+    }
+    item.anchor.matrixAutoUpdate = false
+    item.anchor.add(item.handle)
+    item.handle.add(item.content)
+    item.content.matrixAutoUpdate = false
+    this.scene.add(item.anchor)
+    this.items.set(id, item)
+    const current = item
+    void this.loader
+      .load(source, undefined, item.controller.signal)
+      .then((model) => {
+        if (current.controller.signal.aborted) {
+          model.dispose()
+          return
+        }
+        current.model = model
+        if (
+          donorSlot !== undefined &&
+          typeof source !== 'string' &&
+          !model.weaponMeshes.length &&
+          !rigBones(model).some((b) => canonicalBoneName(b.name) === 'bip001')
+        ) {
+          // A standalone local weapon uses its authored origin as the grip.
+          model.weaponMeshes.push(...model.meshGroups.keys())
+        }
+        isolate(model, subset)
+        current.player = new ClipPlayer(model.root)
+        current.content.add(model.root)
+        this.onModelReady?.()
+        if (donorSlot !== undefined) return
+        const prop = store.getState().props.find((p) => p.id === id)
+        if (!prop) return
+        // A borrowed weapon's local origin is its grip. Other borrowed mesh
+        // groups center on their bind bounds when mounted on a bone.
+        const grip = subset === 'weapon' && binding(model).grips[0]
+        if (grip) {
+          const rest = model.rest.get(grip)!
+          current.pivot.compose(rest.restWorldPos, rest.restWorldQuat, new Vector3(1, 1, 1)).invert()
+        } else if (subset !== 'whole') {
+          const meshes = binding(model).groups.get(subset)!
+          const center = new Vector3()
+          for (const mesh of meshes) {
+            mesh.geometry.computeBoundingBox()
+            center.add(mesh.geometry.boundingBox!.getCenter(new Vector3()).applyMatrix4(mesh.matrixWorld))
+          }
+          center.divideScalar(meshes.length).negate()
+          current.pivot.makeTranslation(center)
+        }
+        store.getState().upsertProp({
+          ...prop,
+          status: 'ready',
+          clips: model.clips,
+          clip:
+            model.clips.find((c) => c.name === prop.clip)?.name ??
+            (subset === 'weapon'
+              ? model.clips.find((c) => /^(?:Normal|Stand)_Idle$/i.test(c.name))?.name
+              : undefined) ??
+            model.clips[0]?.name ??
+            '',
+        })
+      })
+      .catch(() => {
+        if (current.controller.signal.aborted) return
+        current.model?.dispose()
+        current.model = undefined
+        const s = store.getState()
+        if (donorSlot !== undefined) s.updateRuntime(donorSlot, { donorError: true })
+        const prop = s.props.find((p) => p.id === id)
+        if (prop) s.upsertProp({ ...prop, status: 'error' })
+      })
+    return item
+  }
+  sync(
+    time: number,
+    slots: Map<number, { group: Group; actor?: StudioModel; driver?: StudioModel; props?: SlotProps }>,
+    resolve: (id: string) => File | string | undefined,
+  ) {
+    const s = store.getState(),
+      retained = new Set<string>()
+    for (const slot of s.slots) {
+      const source = slot.weapon.source === 'donorC' && resolve(slot.weapon.donor)
+      if (!source) continue
+      const id = 'donor:' + slot.id
+      const item = this.ensure(id, source, 'weapon', slot.id)
+      retained.add(id)
+      const group = slots.get(slot.id)?.group
+      item.anchor.visible = !!group && !!slots.get(slot.id)?.actor
+      if (group) {
+        group.updateWorldMatrix(true, false)
+        item.anchor.matrix.copy(group.matrixWorld)
+      }
+      item.anchor.updateMatrixWorld(true)
+      if (item.model) {
+        const clip =
+          item.model.animations.find((c) => c.name === slot.clip) ??
+          (!binding(item.model).bones.has('bip001') ? item.model.animations[0] : undefined)
+        const at =
+          clip?.duration && time > clip.duration && s.timeline.loop
+            ? time % clip.duration
+            : Math.min(time, clip?.duration ?? 0)
+        item.player?.sample(clip, at)
+      }
+    }
+    for (const slot of s.slots) slots.get(slot.id)?.props?.apply(slot, this.donor(slot.id))
+    for (const prop of s.props) {
+      const source = prop.file ?? resolve(prop.modelId)
+      if (!source) continue
+      retained.add(prop.id)
+      const item = this.ensure(prop.id, source, prop.subset)
+      const slot = slots.get(prop.slotId ?? -1)
+      const actor = slot?.actor
+      const rig = actor && binding(actor).sockets.has(canonicalBoneName(prop.bone)) ? actor : slot?.driver
+      this.mount(item, prop, rig)
+      const clip = item.model?.animations.find((c) => c.name === prop.clip)
+      if (prop.syncAnimation && clip) {
+        const at =
+          s.timeline.loop && time > clip.duration && clip.duration
+            ? time % clip.duration
+            : Math.min(time, clip.duration)
+        item.player?.sample(clip, at)
+      }
+      if (item.model && prop.subset === 'weapon') {
+        // Keep the donor grip at the mount origin as its internal bones animate.
+        const grip = binding(item.model).grips[0]
+        if (grip) {
+          grip.updateWorldMatrix(true, false)
+          const local = new Matrix4().copy(item.content.matrixWorld).invert().multiply(grip.matrixWorld)
+          const pos = new Vector3(),
+            rot = new Quaternion(),
+            scale = new Vector3()
+          if (local.determinant() !== 0) {
+            local.decompose(pos, rot, scale)
+            item.content.matrix.compose(pos, rot.normalize(), scale.set(1, 1, 1)).invert()
+            item.content.updateMatrixWorld(true)
+          }
+        }
+      }
+    }
+    for (const [id, item] of this.items) {
+      if (!retained.has(id)) this.drop(id)
+      else if (item.model && item.lastStage !== s.stage) {
+        styleModel(item.model, s.stage)
+        item.lastStage = s.stage
+      }
+    }
+  }
+  private mount(item: Item, prop: MountedProp, actor?: StudioModel) {
+    const onBone = prop.slotId !== null && prop.bone !== 'world'
+    const bone = actor && binding(actor).sockets.get(canonicalBoneName(prop.bone))
+    item.anchor.visible = prop.visible && (!onBone || !!bone)
+    item.anchor.matrix.identity()
+    if (onBone && actor && bone) {
+      bone.updateWorldMatrix(true, false)
+      const scale = actor.rest.get(bone)!.restWorldScale
+      item.anchor.matrix
+        .copy(bone.matrixWorld)
+        .scale(new Vector3(1 / (scale.x || 1), 1 / (scale.y || 1), 1 / (scale.z || 1)))
+    }
+    applyTransform(item.handle, prop)
+    if (prop.subset !== 'weapon') {
+      if (onBone && prop.subset !== 'whole') item.content.matrix.copy(item.pivot)
+      else item.content.matrix.identity()
+    }
+    item.anchor.updateMatrixWorld(true)
+  }
+  expandBounds(box: Box3) {
+    for (const item of this.items.values()) if (item.anchor.visible) item.model?.expandVisibleBounds(box)
+  }
+  dispose() {
+    for (const id of this.items.keys()) this.drop(id)
+  }
+}

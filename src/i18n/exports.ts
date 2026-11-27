@@ -1,0 +1,57 @@
+import { localized as l } from './types'
+
+export const exportMessages = {
+  originalResolution: l('原始精度', '原寸', '원본 해상도', 'Original'),
+  viewfinder: l('保留取景框', 'フレームを常時表示', '프레임 항상 표시', 'Keep viewfinder visible'),
+  fitCrop: l('适配取景框', 'フレームに収める', '프레임에 맞추기', 'Fit to Crop Frame'),
+  sticker: l('透明贴纸', '透明ステッカー', '투명 스티커', 'Transparent sticker'),
+  palette: l('GIF 调色板', 'GIF パレット', 'GIF 팔레트', 'GIF palette'),
+  fast: l('快速 · 128 色', '高速 · 128 色', '빠르게 · 128색', 'Fast · 128 colors'),
+  balanced: l('均衡 · 256 色', '標準 · 256 色', '균형 · 256색', 'Balanced · 256 colors'),
+  crisp: l('逐帧 · 256 色', 'フレーム別 · 256 色', '프레임별 · 256색', 'Per frame · 256 colors'),
+  clipTrim: l('片段裁剪', 'クリップ範囲', '클립 구간', 'Clip trim'),
+  resetTrim: l('重置范围', '範囲をリセット', '구간 초기화', 'Reset trim'),
+  trim3s: l('裁成 3 秒', '3秒に短縮', '3초로 자르기', 'Trim 3s'),
+  trim3sTip: l(
+    '从入点截取 3 秒，加快贴纸导出。',
+    '開始位置から3秒に絞ると、ステッカーをすばやく書き出せます。',
+    '시작점부터 3초만 잘라 스티커를 더 빠르게 내보내세요.',
+    'Export a sticker faster with a 3-second loop from the trim start.',
+  ),
+  duration: l('输出时长', '出力時間', '출력 길이', 'Output duration'),
+  finalizing: l('正在生成文件', 'ファイルを作成中', '파일 생성 중', 'Finishing file'),
+  stageUnavailable: l(
+    '请等待所有角色与道具载入，并选择有时长的动作。',
+    'すべてのモデルを読み込み、長さのあるクリップを選択してください。',
+    '모든 모델이 로드되면 길이가 있는 클립을 선택하세요.',
+    'Load all cast and props and select a clip with a duration.',
+  ),
+  webmUnavailable: l(
+    '此浏览器无法录制完整的 WebM 序列。请使用 GIF 或 PNG ZIP。',
+    'このブラウザーでは全フレームを WebM に記録できません。GIF または連番 PNG をお使いください。',
+    '이 브라우저에서는 모든 프레임을 WebM으로 녹화할 수 없습니다. GIF 또는 PNG ZIP을 사용하세요.',
+    'This browser could not record every WebM frame. Use GIF or PNG ZIP.',
+  ),
+  azusaBike: l(
+    '梓骑上风香的餐车',
+    'フウカの配達バイクに乗るアズサ',
+    '후우카의 배달 오토바이를 타는 아즈사',
+    'Azusa rides Fuuka’s food bike',
+  ),
+  hoshinoStyle: l(
+    '星野换上未花的武器',
+    'ミカの武器を構えるホシノ',
+    '미카의 무기를 든 호시노',
+    'Hoshino wields Mika’s weapon',
+  ),
+  presetUnavailable: l(
+    '当前模型库无法载入此预设。',
+    '現在のライブラリではこのプリセットを読み込めません。',
+    '현재 라이브러리에서 이 프리셋을 불러올 수 없습니다.',
+    'This preset is unavailable in the current catalog.',
+  ),
+  randomSwap: l('随机换角', 'ランダムにキャスト', '무작위 캐스팅', 'Shuffle cast & motion'),
+  downloadGif: l('下载 GIF', 'GIF をダウンロード', 'GIF 다운로드', 'Download GIF'),
+  downloadZip: l('下载 PNG ZIP', '連番 PNG をダウンロード', 'PNG ZIP 다운로드', 'Download PNG ZIP'),
+  downloadWebm: l('下载 WebM', 'WebM をダウンロード', 'WebM 다운로드', 'Download WebM'),
+}
