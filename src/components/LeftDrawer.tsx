@@ -15,11 +15,11 @@ import {
 } from 'lucide-react'
 import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from 'react'
 import type { Language } from '../i18n'
-import { filterCharacters, variantLabel, modelLabel, type CatalogModel } from '../services/wikiCatalog'
+import { extraOutfitTags, filterCharacters, variantLabel, modelLabel, type CatalogModel } from '../services/wikiCatalog'
 import { useStudioStore, useText, useActiveSlot, type AssignmentTarget } from '../store/useStudioStore'
 import { schoolNames, schoolLabels, type School } from '../i18n/schools'
 import { clipSequence, sequenceDuration, type ClipCategory } from '../engine/AnimationUtils'
-import { IconButton, Portrait, Tabs, useModelLabel } from './shared'
+import { IconButton, Portrait, SelectBox, StandingArt, Tabs, useModelLabel } from './shared'
 
 const featuredTags = ['Default', 'Swimsuit', 'Dress', 'Band', 'Maid']
 const CharacterCard = memo(function CharacterCard({
@@ -50,7 +50,7 @@ const CharacterCard = memo(function CharacterCard({
         className="card-art"
         style={{ '--hue': String(195 + (model.student.charCodeAt(0) % 14) * 9) } as CSSProperties}
       >
-        <Portrait id={model.id} />
+        <StandingArt id={model.id} />
         {(actor || motion) && (
           <span className="assignment">
             {actor && 'A'}
@@ -135,7 +135,7 @@ function ClipPicker() {
       {importError && <small role="alert">{t('importError')}</small>}
       {open && (
         <>
-          <div className="chips clip-chips scroll-chips" aria-label={t('clipFilter')}>
+          <div className="chips clip-chips" aria-label={t('clipFilter')}>
             {(['all', 'cafe', 'interact', 'victory', 'exs', 'combat', 'vehicle', 'other'] as const).map(
               (k) => (
                 <button key={k} aria-pressed={filter === k} onClick={() => setFilter(k)}>
@@ -188,10 +188,7 @@ function Characters({ input }: { input: RefObject<HTMLInputElement | null> }) {
   const recent = useStudioStore((s) => s.recentPicks)
   const label = useModelLabel()
   const list = useRef<HTMLDivElement>(null)
-  const extraTags = useMemo(
-    () => Array.from(new Set(models.flatMap((m) => m.tags))).filter((v) => !featuredTags.includes(v)),
-    [models],
-  )
+  const extraTags = useMemo(() => extraOutfitTags(models, featuredTags), [models])
   const filtered = useMemo(() => filterCharacters(models, search, school, tag), [models, search, school, tag])
   useEffect(() => {
     if (list.current) list.current.scrollTop = 0
@@ -245,15 +242,19 @@ function Characters({ input }: { input: RefObject<HTMLInputElement | null> }) {
           )}
         </div>
         <label className="school-select">
-          {t('school')}
-          <select value={school} onChange={(e) => setSchool(e.target.value as School | 'all')}>
+          <span>{t('school')}</span>
+          <SelectBox
+            value={school}
+            displayLabel={school === 'all' ? t('allSchools') : schoolLabels[school][lang]}
+            onChange={(e) => setSchool(e.target.value as School | 'all')}
+          >
             <option value="all">{t('allSchools')}</option>
             {(Object.keys(schoolNames) as School[]).map((key) => (
               <option key={key} value={key} title={schoolNames[key][lang]}>
                 {schoolLabels[key][lang]}
               </option>
             ))}
-          </select>
+          </SelectBox>
         </label>
         <div className="quick-filters">
           <div className="chips scroll-chips">{['all', ...featuredTags, 'hasProps'].map(chip)}</div>
@@ -318,7 +319,7 @@ export function LeftDrawer() {
       )
         return
       e.preventDefault()
-      setUI({ left: 'characters', leftOpen: true, ...(window.innerWidth <= 900 && { rightOpen: false }) })
+      setUI({ left: 'characters', leftOpen: true })
       setFocusRequest((n) => n + 1)
     }
     window.addEventListener('keydown', shortcut)
@@ -335,7 +336,7 @@ export function LeftDrawer() {
       <IconButton
         className="reopen left glass"
         label={t('showLibrary')}
-        onClick={() => setUI({ leftOpen: true, ...(window.innerWidth <= 900 ? { rightOpen: false } : {}) })}
+        onClick={() => setUI({ leftOpen: true })}
       >
         <PanelLeftOpen size={19} />
       </IconButton>

@@ -1,7 +1,7 @@
 import type { WikiCatalogData } from '../services/wikiCatalog'
-import type { StudentName } from '../i18n/studentNames'
+import { expandSnapshotModel } from '../services/catalogFeeds.js'
 
-// The snapshot encodes each filename as its percent-encoded model ID plus ".glb".
+// Conventional models use a skin string. Exceptions retain the Wiki model record.
 const skins = {
   "Airi": ["","Band"],
   "Akane": ["","Bunny Girl","School Uniform"],
@@ -148,16 +148,12 @@ const skins = {
   "Yukari": ["","Swimsuit"],
   "Yuuka": ["","Pajama","Sportswear"],
   "Yuzu": ["","Battle","Battle / Carrier","Battle / Cut-in","Maid"],
-} satisfies Record<StudentName, string[]>
+} satisfies Record<string, (string | WikiCatalogData['characters'][number]['models'][number])[]>
 
 export const fallbackCatalog: WikiCatalogData = {
   base: "https://cdn.jsdelivr.net/gh/lihaohong6/BlueArchiveModels@main/",
   characters: Object.entries(skins).map(([name, variants]) => ({
     name,
-    models: variants.map(skin => {
-      const id = name + skin.split(' / ').filter(Boolean).map(tag => ' (' + tag + ')').join('')
-      const file = encodeURIComponent(id).replaceAll('(', '%28').replaceAll(')', '%29') + '.glb'
-      return { id, label: id, skin, file }
-    }),
+    models: variants.map(entry => expandSnapshotModel(name, entry)),
   })),
 }

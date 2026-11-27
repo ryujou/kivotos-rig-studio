@@ -9,6 +9,7 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "isolatedModules": true,
+    "allowJs": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
     "noEmit": true,

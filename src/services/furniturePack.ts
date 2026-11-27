@@ -37,6 +37,7 @@ function manifestOf(input: unknown): Manifest {
 }
 const basename = (path: string) => path.split(/[\\/]/).pop()!
 async function glbInfo(file: File) {
+  if (file.size < 20) throw Error('invalid_glb')
   const header = new DataView(await file.slice(0, 20).arrayBuffer())
   if (
     header.getUint32(0, true) !== 0x46546c67 ||
@@ -168,7 +169,7 @@ export function mountFurniture(pack: FurniturePack, slotId: number, bone = 'worl
     })
     s.setTimeline({ time: 0, trimStart: 0, trimEnd: 1 })
   } else {
-    prop.position = m.offset ?? [0, 0, 0]
+    prop.position = [...(m.offset ?? [0, 0, 0])]
     prop.rotation[1] = m.yaw ?? 0
   }
   s.upsertProp(prop)

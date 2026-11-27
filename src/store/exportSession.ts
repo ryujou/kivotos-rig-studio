@@ -20,7 +20,9 @@ export function bindExportScene(value: SceneManager | null) {
 export function closeExport() {
   const { job } = useExportSession.getState()
   if (job?.status === 'done') URL.revokeObjectURL(job.result.url)
-  if (active) active.abort()
+  const controller = active
+  active = undefined
+  controller?.abort()
   useExportSession.setState({ job: null })
 }
 export async function startExport(format: ExportFormat) {
@@ -65,6 +67,6 @@ export async function startExport(format: ExportFormat) {
         },
       })
   } finally {
-    active = undefined
+    if (active === controller) active = undefined
   }
 }

@@ -104,6 +104,7 @@ export class SpringBoneSolver {
     this.remainder = Math.max(0, this.remainder - steps * fixedStep)
     const stiffness = Math.min(1, Math.max(0, this.settings.stiffness))
     const retention = 1 - Math.min(1, Math.max(0, this.settings.damping))
+    const gravity = Number.isFinite(this.settings.gravity) ? this.settings.gravity : 0
     // Even a paused frame needs its constrained orientation after pose sampling.
     for (let i = 0; i < Math.max(1, steps); i++) {
       for (const p of this.particles) {
@@ -125,7 +126,7 @@ export class SpringBoneSolver {
           this.next
             .addScaledVector(this.direction.subVectors(p.current, p.previous), retention)
             .addScaledVector(this.direction.subVectors(this.goal, p.current), 0.012 + stiffness * 0.19)
-          this.next.y -= this.settings.gravity * fixedStep * fixedStep
+          this.next.y -= gravity * fixedStep * fixedStep
         }
         this.direction.subVectors(this.next, this.origin)
         if (this.direction.lengthSq() < 1e-14) this.direction.copy(this.axis)

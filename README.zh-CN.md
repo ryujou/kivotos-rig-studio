@@ -37,14 +37,14 @@
 
 ## ✨ 核心特性
 
-- **零模型入库 · 实时直连 Wiki（仓库内 0 个 `.glb`）** — 启动时直接请求 [`bluearchive.wiki`](https://bluearchive.wiki/wiki/Models) 的 `Module:ModelViewer/data.json` 获取最新 145 角色 / 289 模型清单，按需从 jsDelivr CDN 流式加载并自动写入浏览器 IndexedDB LRU 缓存；Wiki 上新学生或换装时网页自动同步。
-- **极简「先选目标、整卡单击」与快速角色筛选** — 在左侧顶部选中 **`角色 A（外观）`** 或 **`动作 B（动作源）`** 后直接单击任意角色卡片即可切换；支持按 `/` 秒速多语模糊搜索、**全 145 名学生官方学院快速筛选**、服装/带道具筛选胶囊与**最近使用**快捷栏。
-- **双骨架世界空间增量换骨引擎** — **让任意角色 A 流畅演绎任意角色 B 的动作**。采用绑定姿态归一化世界空间四元数重定向，严格保留目标骨长、原生解算 `CUBICSPLINE` 曲线、完美免疫 6 层坦克炮塔嵌套与根轴差异、眼眉局部增量防浮出、`Mouth_XXX` 嘴型支持精确匹配 + 同百位组自动降级。
-- **渐进式高级绑骨实验室 & 发裙弹簧物理** — 高频开关（`按身高缩放 / 道具锁定`、`表情同步`、`发裙物理`、`左右镜像`）直接置顶呈现；**7 部位双动作混合**、**自定义逐骨映射 + 3D 骨架透视**、**物理参数微调**与 **3D Gizmo** 整齐收纳于折叠区，一键展开即可精细调校。
-- **全量道具、武器矩阵与咖啡厅家具交互** — 自动拆解 Wiki 内 **217 个自带道具/乐器/桌椅/载具的模型**（电子琴、坦克、餐车摩托、沙滩椅、乐谱等）逐部件控显隐；支持 **A / B / C 三方武器切换**；支持直接拖放 **咖啡厅互动家具包**（`.glb` / `.zip` + `pack.json`）或挂接远端目录。
+- **零模型入库 · Wiki 与 SchaleDB 自动同步（仓库内 0 个 `.glb`）** — 启动时实时拉取 [`bluearchive.wiki`](https://bluearchive.wiki/wiki/Models) 最新 145 角色 / 289 模型清单，按需从 jsDelivr CDN 流式加载并缓存到浏览器 IndexedDB LRU。当 Wiki 新增角色或换装时，前端自动按需请求 SchaleDB 补全四语译名、学院归类与透明立绘（同时内置每周定时 GitHub Actions 快照同步工作流）。
+- **极简「先选目标、整卡单击」与统一头部比例透明立绘卡** — 在左侧顶部选中 **`角色 A`** 或 **`动作 B`** 后单击整卡即可切换；全部 289 张卡片采用统一头身比例的无裁边透明半身立绘。支持按 `/` 多语搜索、**全 145 学生官方学院筛选**、服装/带道具筛选与**最近选择**栏。
+- **双骨架世界空间增量换骨引擎 + 异常防炸保护** — **让任意角色 A 流畅演绎任意角色 B 的动作**。支持绑定姿态归一化世界空间四元数重定向、原生 `CUBICSPLINE` 曲线、坦克炮塔嵌套、自动隐藏折叠 `switch` 变形体与跨角色连线武器（根治妃咲、武装艾米等跨角色破面穿刺）、眼眉局部增量与 `Mouth_XXX` 嘴型同百位组降级。
+- **二次元柔光着色、渐进式绑骨实验室与发裙弹簧物理** — 内置原版 **无光照**、定制 Half-Lambert **柔光**（保持光环、眼眸、口型与烘焙描边纯净明亮）及 **线框** 模式，搭配 25% 平滑描边；高频开关置顶呈现，**7 部位混合**、**自定义骨骼映射 + 3D 骨架**、**物理微调**与 **3D Gizmo** 按需展开。
+- **全量道具、武器矩阵与咖啡厅家具交互** — 自动拆解 Wiki 内 **217 个自带道具/乐器/桌椅/载具的模型**逐部件控显隐；支持 **A / B / C 三方武器切换**；支持直接拖放 **咖啡厅互动家具包**（`.glb` / `.zip` + `pack.json`）或挂接远端目录。
 - **16 套官方 2–4 人合体战斗结算 + 一键任意换人** — 内置全部 16 套官方合体胜利编队（及虎丸双人坦克、女仆双子 EX、放课后甜点部 4 人乐队），保留精准站位与 `开始 → 结束` 无缝连播，**任意槽位均可一键替换为 289 名学生中的任意一位**。
-- **确定性逐帧导出 · 默认原始精度透明 GIF** — 默认 `1:1` 正方形取景框按动画 5 个关键时刻自动联合算框，完整包住角色、无黑框光环、长武器与道具；默认 **原始精度（1:1 原生 DPR 像素）**，由 Web Worker 运行 `gifenc` 编码，搭配 25% 精细日系描边与纯净透明底，另支持 **PNG 序列 ZIP** 与 **WebM 视频**。
-- **现代化 SCHALE 美学 & 日中韩英四语切换** — 单层悬浮顶栏融合槽位控制条、自定义 Pointer-Events 像素对齐时间轴、**SCHALE 亮色** / **Studio 深色**双主题，完整支持 **简体中文 / 日本語 / 한국어 / English** 一键切换。
+- **确定性逐帧导出 · 默认原始精度透明 GIF** — 默认 `1:1` 正方形取景框自动包住角色、无黑框光环、长武器与道具；默认 **原始精度（1:1 原生 DPR 像素）**，由 Web Worker 离线运行 `gifenc` 编码，另支持 **PNG 序列 ZIP** 与 **WebM 视频**。
+- **内置图解使用说明（`?`）、手机竖屏适配与日中韩英四语** — 顶栏一键打开 4 步实景截图 + 矢量箭头演示教程（`?` 快捷开关），全面适配 **手机竖屏（390×844）**（单行精简顶栏、左右互斥抽屉 + 点击蒙层关闭、安全区与触控时间轴手柄），支持 **SCHALE 亮色 / Studio 深色** 及 **简体中文 / 日本語 / 한국어 / English** 一键切换。
 
 ---
 
@@ -53,22 +53,22 @@
 <table>
   <tr>
     <td width="50%" align="center">
-      <img src="docs/media/showcase-keyboard.png" alt="通过学院+搜索快速筛选，礼服日奈弹乐队爱理的电子琴" /><br />
-      <sub><strong>学院快速筛选 + 跨角色乐器互动</strong> · 礼服日奈 ← 乐队爱理 <code>NonWeapon_Keyboard</code></sub>
+      <img src="docs/media/showcase-keyboard.png" alt="阿露演绎乐队爱理电子琴与内置音箱道具" /><br />
+      <sub><strong>跨角色乐器与内置道具联动</strong> · 阿露 ← 乐队爱理 <code>NonWeapon_Keyboard</code></sub>
     </td>
     <td width="50%" align="center">
-      <img src="docs/media/showcase-tank.png" alt="优香与诺亚双人乘坐虎丸坦克" /><br />
-      <sub><strong>双槽位坦克换角</strong> · 优香 &amp; 诺亚驾驶虎丸（实时跟随炮塔乘位骨骼）</sub>
+      <img src="docs/media/showcase-guide.png" alt="内置 4 步截图演示与矢量箭头使用说明弹窗" /><br />
+      <sub><strong>内置图解使用说明（<code>?</code>）</strong> · 4 步实景截图 + 矢量箭头标注（四语完整支持）</sub>
     </td>
   </tr>
   <tr>
     <td width="50%" align="center">
-      <img src="docs/media/showcase-duo-victory.png" alt="阿露与睦月双人合体胜利与 1:1 原始精度取景框" /><br />
-      <sub><strong>双人合体结算 + 自动 1:1 原始精度取景框</strong> · 阿露 &amp; 睦月 · <code>1468×1468</code></sub>
+      <img src="docs/media/showcase-duo-victory.png" alt="礼服日奈与礼服亚子双人合体胜利与 1:1 透明取景框" /><br />
+      <sub><strong>双人合体结算 + 自动 1:1 原始精度取景框</strong> · 礼服日奈 &amp; 礼服亚子 · 透明贴纸导出</sub>
     </td>
     <td width="50%" align="center">
-      <img src="docs/media/showcase-dark-ja.png" alt="Studio 深色模式与日语界面" /><br />
-      <sub><strong>Studio 深色主题 + 四语界面</strong> · 简体中文 / 日本語 / 한국어 / English 秒级切换</sub>
+      <img src="docs/media/showcase-dark-ja.png" alt="Studio 深色模式、柔光着色与日语界面" /><br />
+      <sub><strong>Studio 深色 + 二次元柔光 + 四语界面</strong> · 简体中文 / 日本語 / 한국어 / English 秒级切换</sub>
     </td>
   </tr>
 </table>
@@ -133,6 +133,8 @@ npm run dev
 > npm run build
 > npm run preview
 > ```
+
+回归测试使用内存中的模型样例，可离线运行。执行 `npm test` 运行 Node 测试，执行 `npm run test:coverage` 查看 V8 覆盖率。两个命令均已在 Node.js 25.9 上验证。
 
 ---
 

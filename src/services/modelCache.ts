@@ -119,7 +119,8 @@ export async function fetchModelBuffer(url: string, onProgress?: Progress, signa
     return cached
   }
   const timeout = AbortSignal.timeout(120_000)
-  const response = await fetch(url, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout })
+  const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout
+  const response = await fetch(url, { signal: requestSignal })
   if (!response.ok) throw new Error('model_http_' + response.status)
   const total = Number(response.headers.get('Content-Length')) || null
   onProgress?.(0, total)
@@ -128,12 +129,22 @@ export async function fetchModelBuffer(url: string, onProgress?: Progress, signa
   if (reader) {
     const chunks: Uint8Array[] = []
     let received = 0
-    while (true) {
-      const { value, done } = await reader.read()
-      if (done) break
-      chunks.push(value)
-      received += value.byteLength
-      onProgress?.(received, total)
+    const onAbort = () => void reader.cancel().catch(() => {})
+    requestSignal.addEventListener('abort', onAbort, { once: true })
+    try {
+      if (requestSignal.aborted) onAbort()
+      while (true) {
+        requestSignal.throwIfAborted()
+        const { value, done } = await reader.read()
+        requestSignal.throwIfAborted()
+        if (done) break
+        chunks.push(value)
+        received += value.byteLength
+        onProgress?.(received, total)
+      }
+    } finally {
+      requestSignal.removeEventListener('abort', onAbort)
+      reader.releaseLock()
     }
     const joined = new Uint8Array(received)
     let offset = 0

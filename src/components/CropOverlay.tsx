@@ -37,7 +37,7 @@ export function CropOverlay() {
         style={{
           left: Math.max(crop.x, safe.x) + 8,
           top: Math.min(crop.y + crop.height, safe.y + safe.height) - 8,
-          maxWidth: Math.min(crop.width, safe.width) - 16,
+          maxWidth: Math.max(0, Math.min(crop.width, safe.width) - 16),
         }}
       >
         <Scan size={12} /> {width} × {height} · {settings.fps} FPS · {frames} {t('frames')} ·{' '}

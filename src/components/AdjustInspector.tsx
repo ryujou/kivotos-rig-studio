@@ -10,7 +10,7 @@ import {
   type Vec3,
 } from '../engine/RigDefinition'
 import { useActiveSlot, useStudioStore, useText } from '../store/useStudioStore'
-import { Toggle } from './shared'
+import { SelectBox, Toggle } from './shared'
 
 const sources: PartSource[] = ['motionB', 'actorA', 'rest']
 const sourceLabels = { motionB: 'motion', actorA: 'actor', rest: 'restLock' } as const
@@ -82,11 +82,16 @@ export function AdjustInspector() {
   }
   const mapping = new Map(names.map((name) => [canonicalBoneName(name), name]))
   const auto = (name: string) => {
+    if (runtime?.manualOnlyTargets?.has(name)) return undefined
     const key = canonicalBoneName(name)
     return mapping.get(rig.mirror ? mirrorBoneName(key) : key)
   }
   const filtered = targets.filter((name) => name.toLowerCase().includes(search.trim().toLowerCase()))
   const actorClips = runtime?.actorClips ?? []
+  const activeSecondaryClip = actorClips.some((c) => c.name === rig.secondaryClip)
+    ? rig.secondaryClip
+    : (actorClips[0]?.name ?? '')
+  const autoMappingLabel = t('autoMapping') + ' · ' + (auto(selected) ?? '—')
   return (
     <div className="inspector-scroll adjust-inspector">
       <WeaponControls />
@@ -139,19 +144,16 @@ export function AdjustInspector() {
         {Object.values(rig.mixer).includes('actorA') && (
           <label className="rig-select">
             {t('secondaryClip')}
-            <select
-              value={
-                actorClips.some((c) => c.name === rig.secondaryClip)
-                  ? rig.secondaryClip
-                  : (actorClips[0]?.name ?? '')
-              }
+            <SelectBox
+              value={activeSecondaryClip}
+              displayLabel={activeSecondaryClip}
               disabled={!actorClips.length}
               onChange={(e) => set({ secondaryClip: e.target.value })}
             >
               {actorClips.map((c) => (
                 <option key={c.name}>{c.name}</option>
               ))}
-            </select>
+            </SelectBox>
           </label>
         )}
       </details>
@@ -229,17 +231,16 @@ export function AdjustInspector() {
           <>
             <label className="rig-select">
               {t('sourceBone')}
-              <select
+              <SelectBox
                 value={override.source ?? ''}
+                displayLabel={override.source ?? autoMappingLabel}
                 onChange={(e) => edit({ source: e.target.value || undefined })}
               >
-                <option value="">
-                  {t('autoMapping')} · {auto(selected) ?? '—'}
-                </option>
+                <option value="">{autoMappingLabel}</option>
                 {names.map((name) => (
                   <option key={name}>{name}</option>
                 ))}
-              </select>
+              </SelectBox>
             </label>
             <Toggle
               label={t('restLock')}

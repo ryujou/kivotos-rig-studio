@@ -2,11 +2,13 @@ import { localized, type Language } from './types'
 export type { Language, Localized } from './types'
 export { languages } from './types'
 
+import { guideMessages } from './guide'
 import { exportMessages } from './exports'
 import { interactions } from './interactions'
 
 export const messages = {
   ...interactions,
+  ...guideMessages,
   ...exportMessages,
   adjust: localized('调整', '調整', '조정', 'Adjust'),
   school: localized('学院', '学園', '학원', 'School'),

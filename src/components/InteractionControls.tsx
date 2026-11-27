@@ -1,10 +1,11 @@
 import { droppedFiles } from '../services/furniturePack'
-import { useRef, type ReactNode } from 'react'
+import { useRef, type ChangeEvent, type ReactNode } from 'react'
 import { useStudioStore, useText, type Slot } from '../store/useStudioStore'
 import { modelLabel } from '../services/wikiCatalog'
 import type { Vec3 } from '../engine/RigDefinition'
 import { canonicalBoneName } from '../engine/RigDefinition'
 import type { MessageKey } from '../i18n'
+import { SelectBox } from './shared'
 
 export function ModelSelect({
   value,
@@ -21,26 +22,44 @@ export function ModelSelect({
     lang = useStudioStore((s) => s.language),
     t = useText()
   const files = useStudioStore((s) => s.localFiles)
-  return (
-    <label className={children ? 'cast-select' : 'model-select'} title={label}>
-      {children}
-      <select aria-label={label} value={value} onChange={(e) => onChange(e.target.value)}>
-        {!files[value] && !models.some((m) => m.id === value) && (
-          <option value={value}>{t('choose')}</option>
-        )}
-        {Object.entries(files)
-          .filter(([id]) => id.startsWith('local:'))
-          .map(([id, file]) => (
-            <option key={id} value={id}>
-              {file.name}
-            </option>
-          ))}
-        {models.map((m) => (
-          <option key={m.id} value={m.id}>
-            {modelLabel(m, lang)}
+  const model = models.find((m) => m.id === value)
+  const selectProps = {
+    'aria-label': label,
+    value,
+    onChange: (e: ChangeEvent<HTMLSelectElement>) => onChange(e.target.value),
+  }
+  const options = (
+    <>
+      {!files[value] && !model && <option value={value}>{t('choose')}</option>}
+      {Object.entries(files)
+        .filter(([id]) => id.startsWith('local:'))
+        .map(([id, file]) => (
+          <option key={id} value={id}>
+            {file.name}
           </option>
         ))}
-      </select>
+      {models.map((m) => (
+        <option key={m.id} value={m.id}>
+          {modelLabel(m, lang)}
+        </option>
+      ))}
+    </>
+  )
+  if (children)
+    return (
+      <label className="cast-select" title={label}>
+        {children}
+        <select {...selectProps}>{options}</select>
+      </label>
+    )
+  return (
+    <label className="model-select" title={label}>
+      <SelectBox
+        {...selectProps}
+        displayLabel={model ? modelLabel(model, lang) : (files[value]?.name ?? t('choose'))}
+      >
+        {options}
+      </SelectBox>
     </label>
   )
 }
@@ -168,11 +187,16 @@ export function BoneSelect({
   const slots = useStudioStore((s) => s.slots),
     runtime = useStudioStore((s) => s.runtime),
     t = useText()
+  function boneLabel(name: string) {
+    const key = boneKeys[canonicalBoneName(name)]
+    return key ? t(key) + ' · ' + name : name
+  }
   return (
     <label className="select-row">
       {t('attachment')}
-      <select
+      <SelectBox
         value={slotId === null ? 'world' : slotId + '/' + bone}
+        displayLabel={slotId === null ? t('worldOrigin') : boneLabel(bone)}
         onChange={(e) => {
           const value = e.target.value,
             i = value.indexOf('/')
@@ -185,13 +209,12 @@ export function BoneSelect({
           <optgroup key={slot.id} label={t('slot') + ' ' + slot.id}>
             {(runtime[slot.id]?.attachmentNames ?? []).map((name) => (
               <option key={name} value={slot.id + '/' + name}>
-                {boneKeys[canonicalBoneName(name)] ? t(boneKeys[canonicalBoneName(name)]) + ' · ' : ''}
-                {name}
+                {boneLabel(name)}
               </option>
             ))}
           </optgroup>
         ))}
-      </select>
+      </SelectBox>
     </label>
   )
 }

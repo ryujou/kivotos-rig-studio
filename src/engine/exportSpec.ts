@@ -32,7 +32,7 @@ export function cropRect(view: Viewport, aspect: Aspect): Rect {
   return { x: box.x + (box.width - width) / 2, y: box.y + (box.height - height) / 2, width, height }
 }
 export function outputSize(rect: Rect, resolution: ExportSettings['resolution'], dpr = 1) {
-  const scale = resolution === 'original' ? dpr : resolution / Math.max(rect.width, rect.height)
+  const scale = resolution === 'original' ? dpr : resolution / Math.max(1, rect.width, rect.height)
   return {
     width: Math.max(1, Math.round(rect.width * scale)),
     height: Math.max(1, Math.round(rect.height * scale)),

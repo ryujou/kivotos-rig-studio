@@ -37,14 +37,14 @@
 
 ## ✨ Highlights
 
-- **Zero-Storage Live Wiki Sync (`0` `.glb` files in repo)** — Streams the live 145-student / 289-model catalog directly from [`bluearchive.wiki`](https://bluearchive.wiki/wiki/Models) (`Module:ModelViewer/data.json`) and fetches `.glb` binaries on demand from jsDelivr CDN with an automatic IndexedDB LRU cache. New wiki models appear automatically.
-- **Effortless Target-First Workflow & Fast Character Filtering** — Pick **`Actor A`** or **`Motion B`** once at the top of the drawer and click any entire character card directly. Press `/` for instant multi-language search, filter all 145 students by **official Academy / School**, outfit, or embedded props, and jump between your **Recent Picks** in one click.
-- **Dual-Rig World-Space Skeleton Retargeting** — Let **any Character A perform any Character B's animation** cleanly. Rest-pose normalized world-space quaternion transfer preserves target bone lengths, handles `CUBICSPLINE` tracks natively, survives deep vehicle/turret hierarchies (e.g. Cherino/Iroha tanks), transfers eye-bone deltas without pop-out, and maps `Mouth_XXX` morph targets with hundred-series fallback.
-- **Progressive-Disclosure Rig Lab & Verlet Spring Physics** — Core switches (`Ground-Scaled / Prop-Locked`, `Expression Sync`, `Hair/Skirt Physics`, `Mirror L ↔ R`) stay front and center, while **7-part Body Mixer**, **Custom Bone Remapper + 3D Skeleton Overlay**, **Root/Spring Tuning**, and **3D Gizmo** expand cleanly on demand.
+- **Zero-Storage Live Wiki + SchaleDB Auto-Sync (`0` `.glb` files in repo)** — Streams the live 145-student / 289-model catalog directly from [`bluearchive.wiki`](https://bluearchive.wiki/wiki/Models) (`Module:ModelViewer/data.json`) with on-demand jsDelivr CDN loading and an IndexedDB LRU cache. When the Wiki adds a brand-new student or outfit, the app automatically enriches 4-language names, academy tags, and transparent standing art live from SchaleDB (backed by a weekly GitHub Actions snapshot sync).
+- **Effortless Target-First Workflow, Uniform Bust Cards & Fast Filtering** — Pick **`Actor A`** or **`Motion B`** once and click any card directly; all 289 cards render uniformly head-framed transparent standing illustrations. Press `/` for instant multi-language search, filter by **official Academy**, outfit, or embedded props, and jump between **Recent Picks** in one click.
+- **Dual-Rig World-Space Retargeting + Rig-Safety Guards** — Let **any Character A perform any Character B's animation** cleanly. Rest-pose normalized world-space quaternion transfer preserves target bone lengths, handles `CUBICSPLINE` tracks natively, survives deep vehicle/turret hierarchies, auto-hides collapsed switch morphs and cross-character tethered weapons (preventing polygon spikes), transfers eye deltas cleanly, and maps `Mouth_XXX` morph targets with hundred-series fallback.
+- **Anime Soft-Lit Shading, Progressive Rig Lab & Verlet Spring Physics** — Switch between authentic **Unlit**, custom Half-Lambert **Soft-Lit** (keeping halos, eyes, mouths, and baked outlines crisp), and **Wireframe** with `25%` smooth-normal outlines. Core rig toggles stay front and center while **7-part Body Mixer**, **Custom Bone Remapper + 3D Skeleton Overlay**, **Root/Spring Tuning**, and **3D Gizmo** expand cleanly on demand.
 - **Universal Prop, Weapon & Cafe Furniture Interaction** — Auto-dissects all **217 Wiki models with embedded props/instruments/furniture/vehicles** (keyboards, tanks, food bikes, beach chairs, tables, sheet music) for per-part toggling; provides an **A / B / C Three-Way Weapon Matrix**; supports drag-and-drop **Cafe Furniture Interaction Packs** (`.glb` / `.zip` + `pack.json`) and remote pack indices.
-- **16 Official 2–4 Character Joint Victory Combos + 1-Click Cast Swap** — Load all 16 in-game duo/trio/quartet victory formations (plus Wiki-native duos like Toramaru Tank Tandem & Maid Twin EX) with exact `(x, z, yaw)` placements, `Start → End` chaining, and **replace any slot with any of the 289 students**.
+- **16 Official 2–4 Character Joint Victory Combos + 1-Click Cast Swap** — Load all 16 in-game duo/trio/quartet victory formations (plus Wiki-native duos like Toramaru Tank Tandem, Maid Twin EX & After-School Sweets Band) with exact `(x, z, yaw)` placements, `Start → End` chaining, and **replace any slot with any of the 289 students**.
 - **Deterministic Native-Resolution Transparent GIF / PNG ZIP / WebM Export** — Auto-fitting `1:1` square viewfinder encloses full character height, unlined glowing halos, tall weapons, and props across the clip; defaults to **Original (1:1 DPR native precision)** with clean `25%` Wiki-authentic outlines and alpha-matte transparency (`gifenc` Web Worker, disposal mode 2).
-- **Modern SCHALE Studio UI & Full 4-Language i18n** — Single-layer floating TopBar with merged cast/slot strip, pixel-aligned custom Pointer-Events timeline rail, **SCHALE Light** & **Studio Dark** themes, and complete **English / 简体中文 / 日本語 / 한국어** localization (all UI controls + all 145 students, academies, and costume variants).
+- **Illustrated User Guide (`?`), Mobile Portrait UI & Full 4-Language i18n** — Built-in 4-step illustrated walkthrough with annotated arrows (`?`), responsive mobile portrait layout (`390×844`, single-row TopBar, mutually exclusive drawers + scrim, safe-area & thumb-friendly timeline), **SCHALE Light** & **Studio Dark** themes, and complete **English / 简体中文 / 日本語 / 한국어** localization.
 
 ---
 
@@ -53,22 +53,22 @@
 <table>
   <tr>
     <td width="50%" align="center">
-      <img src="docs/media/showcase-keyboard.png" alt="Hina (Dress) playing Airi (Band) keyboard with Academy filter & simplified Adjust panel" /><br />
-      <sub><strong>Fast Academy Filter + Cross-Rig Prop</strong> · Hina (Dress) ← Airi (Band) <code>NonWeapon_Keyboard</code></sub>
+      <img src="docs/media/showcase-keyboard.png" alt="Aru playing Airi (Band) keyboard with embedded speaker props" /><br />
+      <sub><strong>Cross-Rig Instrument &amp; Props</strong> · Aru ← Airi (Band) <code>NonWeapon_Keyboard</code></sub>
     </td>
     <td width="50%" align="center">
-      <img src="docs/media/showcase-tank.png" alt="Yuuka & Noa riding Iroha & Ibuki Toramaru Tank" /><br />
-      <sub><strong>2-Slot Tank Cast Swap</strong> · Yuuka &amp; Noa riding Toramaru (live moving turret socket)</sub>
+      <img src="docs/media/showcase-guide.png" alt="Built-in 4-step illustrated user guide with annotated vector arrows" /><br />
+      <sub><strong>Built-in Illustrated User Guide (<code>?</code>)</strong> · 4 annotated steps with callout arrows in 4 languages</sub>
     </td>
   </tr>
   <tr>
     <td width="50%" align="center">
-      <img src="docs/media/showcase-duo-victory.png" alt="Aru & Mutsuki Duo Victory in 1:1 native viewfinder" /><br />
-      <sub><strong>Duo Joint Victory + Auto 1:1 Native Viewfinder</strong> · Aru &amp; Mutsuki · <code>1468×1468</code> Original</sub>
+      <img src="docs/media/showcase-duo-victory.png" alt="Hina (Dress) & Ako (Dress) Duo Victory in 1:1 transparent native viewfinder" /><br />
+      <sub><strong>Duo Joint Victory + Auto 1:1 Native Viewfinder</strong> · Hina (Dress) &amp; Ako (Dress) · Original Transparent</sub>
     </td>
     <td width="50%" align="center">
-      <img src="docs/media/showcase-dark-ja.png" alt="Studio Dark theme in Japanese" /><br />
-      <sub><strong>Studio Dark Mode + 4-Language UI</strong> · Seamless switch between EN / 中 / 日 / 한</sub>
+      <img src="docs/media/showcase-dark-ja.png" alt="Studio Dark theme in Japanese with Anime Soft-Lit shading" /><br />
+      <sub><strong>Studio Dark + Anime Soft-Lit + 4-Language UI</strong> · Seamless switch between EN / 中 / 日 / 한</sub>
     </td>
   </tr>
 </table>
@@ -133,6 +133,8 @@ Open **`http://localhost:5173`** in your browser. No local `.glb` download or ba
 > npm run build
 > npm run preview
 > ```
+
+The regression suite runs offline with in-memory model fixtures. Run `npm test` for the Node tests or `npm run test:coverage` for V8 coverage. Both commands have been verified with Node.js 25.9.
 
 ---
 

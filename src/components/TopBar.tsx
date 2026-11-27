@@ -1,7 +1,7 @@
-import { ArrowLeftRight, Download, Moon, Plus, Sun, X } from 'lucide-react'
+import { ArrowLeftRight, BookOpen, Download, Moon, Plus, Sun, X } from 'lucide-react'
 import { languages, type Language } from '../i18n'
 import { useStudioStore, useText } from '../store/useStudioStore'
-import { IconButton, useModelLabel } from './shared'
+import { IconButton, SelectBox, useModelLabel } from './shared'
 import { startExport } from '../store/exportSession'
 
 const langLabels: Record<Language, string> = { zh: '中', ja: '日', ko: '한', en: 'EN' }
@@ -55,6 +55,19 @@ export function TopBar() {
             )
           })}
         </div>
+        {slots.length > 1 && (
+          <SelectBox
+            className="mobile-slot-select"
+            aria-label={t('activeSlot')}
+            value={activeId}
+            displayLabel={String(activeId)}
+            onChange={(event) => actions.focusSlot(Number(event.target.value))}
+          >
+            {slots.map(slot => (
+              <option key={slot.id} value={slot.id}>{slot.id} · {label(slot.actor)}</option>
+            ))}
+          </SelectBox>
+        )}
         <IconButton label={t('swap')} onClick={actions.swap}>
           <ArrowLeftRight size={15} />
         </IconButton>
@@ -68,6 +81,17 @@ export function TopBar() {
         )}
       </div>
       <div className="topbar-actions">
+        <button
+          className="guide-trigger"
+          aria-label={t('guide')}
+          title={t('guide') + ' (?)'}
+          aria-keyshortcuts="?"
+          aria-haspopup="dialog"
+          onClick={() => setUI({ guideOpen: true })}
+        >
+          <BookOpen size={16} />
+          <span>{t('guide')}</span>
+        </button>
         <div className="languages" aria-label={t('language')}>
           {languages.map((lang) => (
             <button
@@ -82,6 +106,17 @@ export function TopBar() {
             </button>
           ))}
         </div>
+        <SelectBox
+          className="mobile-lang-select"
+          aria-label={t('language')}
+          value={language}
+          displayLabel={langLabels[language]}
+          onChange={(event) => actions.setLanguage(event.target.value as Language)}
+        >
+          {languages.map(lang => (
+            <option key={lang} value={lang} lang={lang}>{fullNames[lang]}</option>
+          ))}
+        </SelectBox>
         <IconButton label={t(theme === 'light' ? 'dark' : 'light')} onClick={actions.toggleTheme}>
           {theme === 'light' ? <Moon size={17} /> : <Sun size={17} />}
         </IconButton>
@@ -94,11 +129,7 @@ export function TopBar() {
               void startExport('gif')
               return
             }
-            setUI({
-              rightOpen: true,
-              right: 'export',
-              ...(window.innerWidth <= 900 ? { leftOpen: false } : {}),
-            })
+            setUI({ rightOpen: true, right: 'export' })
           }}
         >
           <Download size={16} />

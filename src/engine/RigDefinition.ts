@@ -74,8 +74,9 @@ export function mirrorBoneName(key: string) {
     .join('_')
 }
 export function classifyBone(key: string): BodyPart | 'secondary' {
-  if (/eye|cheek|mouth|brow/.test(key) && !/weapon/.test(key)) return 'face'
   if (/weapon/.test(key)) return 'weapon'
+  if (/(?:^|_)(?:eye|eyes|eyelid|eyelash|eyebrow|eyeblow|eyeball|cheek|mouth|brow)(?:_|\d|$)/.test(key))
+    return 'face'
   if (/^(?:bip001_(?:head|neck)|haloroot)$/.test(key)) return 'head'
   if (/^bip001(?:_(?:spine\d*|pelvis))?$/.test(key)) return 'torso'
   if (/thigh|calf|foot|toe|knee|_hip/.test(key)) return 'legs'

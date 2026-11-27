@@ -11,6 +11,12 @@ import {
   Vector3,
 } from 'three'
 
+export function isBakedOutline(node: Object3D) {
+  for (let part: Object3D | null = node; part; part = part.parent)
+    if (/(?:^|[\s_-])outline\d*(?:[\s_-]|$)/i.test(part.name)) return true
+  return false
+}
+
 // Port of the wiki ModelViewer's area-weighted weld at 1e-4 position precision.
 export function addSmoothNormals(geometry: BufferGeometry) {
   if (geometry.hasAttribute('smoothNormal')) return
@@ -122,7 +128,7 @@ export class OutlineEffect {
     root.updateMatrixWorld(true)
     const meshes: Mesh[] = []
     root.traverse((node) => {
-      if (!(node instanceof Mesh)) return
+      if (!(node instanceof Mesh) || isBakedOutline(node)) return
       for (let part: Object3D | null = node; part; part = part.parent)
         if (/halo|^mouth_/i.test(part.name)) return
       meshes.push(node)

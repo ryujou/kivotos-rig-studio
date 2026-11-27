@@ -1,9 +1,12 @@
 import { fallbackCatalog } from '../data/fallbackCatalog'
 import { propModelIds } from '../data/propModels'
-import { searchAliases, studentNames, type StudentName } from '../i18n/studentNames'
-import { schoolNames, studentSchools, type School } from '../i18n/schools'
-import { variantNames } from '../i18n/variants'
-import { languages, localized, type Language, type Localized } from '../i18n/types'
+import { studentNames, type StudentName } from '../i18n/studentNames'
+import { studentSchools, type School } from '../i18n/schools'
+import { localized, type Localized } from '../i18n/types'
+import { fetchWikiData } from './catalogFeeds.js'
+import { modelSearch } from './catalogSearch'
+import { enrichWithSchaleDb } from './schaleSync'
+export { normalizeSearch, variantLabel, modelLabel, extraOutfitTags, filterCharacters } from './catalogSearch'
 
 interface WikiModel {
   id: string
@@ -25,96 +28,31 @@ export interface CatalogModel extends WikiModel {
   hasProps: boolean
 }
 
-const endpoint =
-  'https://bluearchive.wiki/w/api.php?action=query&prop=revisions&titles=Module:ModelViewer/data.json&rvslots=main&rvprop=content&format=json&origin=*'
-export const normalizeSearch = (value: string) =>
-  value
-    .normalize('NFKC')
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, ' ')
-    .trim()
-export function variantLabel(tag: string, lang: Language) {
-  return variantNames[tag]?.[lang] ?? tag
-}
-export function modelLabel(model: CatalogModel, lang: Language) {
-  return (
-    model.names[lang] +
-    (model.skin ? ' (' + model.tags.map((tag) => variantLabel(tag, lang)).join(' / ') + ')' : '')
-  )
-}
-
-export function filterCharacters(models: CatalogModel[], query: string, school: School | 'all', tag: string) {
-  const terms = normalizeSearch(query).split(' ').filter(Boolean)
-  return models.filter(
-    (model) =>
-      (school === 'all' || model.school === school) &&
-      (tag === 'all' || (tag === 'hasProps' ? model.hasProps : model.tags.includes(tag))) &&
-      terms.every((term) => model.search.includes(term)),
-  )
-}
-
-function enrich(data: WikiCatalogData): CatalogModel[] {
-  const seen = new Set<string>()
-  const models: CatalogModel[] = []
-  for (const { name, models: entries } of data.characters) {
-    if (typeof name !== 'string' || !Array.isArray(entries)) throw new Error('invalid_character')
+function catalogModels(data: WikiCatalogData): CatalogModel[] {
+  return data.characters.flatMap(({ name, models }) => {
     const key = name as StudentName
     const names = Object.hasOwn(studentNames, name) ? studentNames[key] : localized(name, name, name, name)
     const school = Object.hasOwn(studentSchools, name) ? studentSchools[key] : 'other'
-    for (const entry of entries) {
-      if (
-        ![entry.id, entry.label, entry.file, entry.skin].every((v) => typeof v === 'string') ||
-        !entry.id ||
-        !entry.file ||
-        seen.has(entry.id)
-      )
-        throw new Error('invalid_model')
-      const tags = entry.skin ? entry.skin.split(/\s*\/\s*/) : ['Default']
-      const url = new URL(entry.file, data.base)
-      if (url.protocol !== 'https:') throw new Error('invalid_url')
-      const words = [
-        name,
-        entry.id,
-        entry.label,
-        ...Object.values(names),
-        ...Object.values(schoolNames[school]),
-        searchAliases[key] ?? '',
-      ]
-      for (const tag of tags) {
-        words.push(tag, ...languages.map((lang) => variantLabel(tag, lang)))
-        if (tag === 'Riding' || tag === 'Kid')
-          words.push(...Object.values(variantNames[tag === 'Riding' ? 'Cycling' : 'Small']))
-      }
-      models.push({
+    return models.map(entry => {
+      const model = {
         ...entry,
         student: name,
         school,
         names,
-        tags,
-        url: url.href,
-        search: normalizeSearch(words.join(' ')),
+        tags: entry.skin ? entry.skin.split(/\s*\/\s*/) : ['Default'],
+        url: new URL(entry.file, data.base).href,
         hasProps: propModelIds.has(entry.id),
-      })
-      seen.add(entry.id)
-    }
-  }
-  if (!models.length) throw new Error('empty_catalog')
-  return models
+      }
+      return { ...model, search: modelSearch(model) }
+    })
+  })
 }
 
-export const snapshotModels = enrich(fallbackCatalog)
+export const snapshotModels = catalogModels(fallbackCatalog)
 export async function loadWikiCatalog(): Promise<{ models: CatalogModel[]; status: 'live' | 'offline' }> {
   try {
-    const res = await fetch(endpoint, { signal: AbortSignal.timeout(9000), cache: 'no-cache' })
-    if (!res.ok) throw new Error('wiki_http')
-    const payload: {
-      query?: { pages?: Record<string, { revisions?: { slots?: { main?: { '*'?: string } } }[] }> }
-    } = await res.json()
-    const content = Object.values(payload.query?.pages ?? {})[0]?.revisions?.[0]?.slots?.main?.['*']
-    if (typeof content !== 'string') throw new Error('missing_revision')
-    const data = JSON.parse(content) as WikiCatalogData
-    if (typeof data.base !== 'string' || !Array.isArray(data.characters)) throw new Error('invalid_catalog')
-    return { models: enrich(data), status: 'live' }
+    const models = catalogModels(await fetchWikiData())
+    return { models: await enrichWithSchaleDb(models), status: 'live' }
   } catch {
     return { models: snapshotModels, status: 'offline' }
   }

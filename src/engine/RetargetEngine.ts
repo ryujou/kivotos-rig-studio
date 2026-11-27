@@ -19,7 +19,7 @@ import {
   type RigSettings,
 } from './RigDefinition'
 import { SpringBoneSolver } from './SpringBoneSolver'
-import { rigBones, type StudioModel } from './ModelLoader'
+import { decomposeRigTransform, rigBones, type StudioModel } from './ModelLoader'
 
 // Absolute sampling retains the GLTFLoader interpolant factories (including cubic splines).
 export class ClipPlayer {
@@ -65,6 +65,7 @@ function indexRig(model: StudioModel) {
       rest,
       parentBind: rest.restWorldQuat.clone().multiply(rest.restLocalQuat.clone().invert()).normalize(),
       inverseRest: rest.restWorldQuat.clone().normalize().invert(),
+      validRot: true,
       matrix: new Matrix4(),
       pos: new Vector3(),
       rot: new Quaternion(),
@@ -85,7 +86,7 @@ function mouths(model: StudioModel) {
       {
         id: Number(id[1]),
         mesh,
-        bind: model.restMouthWeights.get(mesh)!,
+        bind: model.restMorphWeights.get(mesh)!,
         values: [...mesh.morphTargetInfluences],
       },
     ]
@@ -125,7 +126,7 @@ class SampledRig {
         if (copy instanceof Mesh && node instanceof Mesh) {
           copy.morphTargetDictionary = node.morphTargetDictionary
           copy.morphTargetInfluences = [
-            ...(model.restMouthWeights.get(node) ?? node.morphTargetInfluences ?? []),
+            ...(model.restMorphWeights.get(node) ?? node.morphTargetInfluences ?? []),
           ]
         }
         copies.set(node, copy)
@@ -144,8 +145,10 @@ class SampledRig {
     if (stage) this.inverseStage.copy(stage.matrixWorld).invert()
     else this.inverseStage.identity()
     for (const j of this.joints) {
-      j.matrix.multiplyMatrices(this.inverseStage, j.node.matrixWorld).decompose(j.pos, j.rot, j.scale)
-      j.rot.normalize()
+      j.matrix.multiplyMatrices(this.inverseStage, j.node.matrixWorld)
+      j.validRot = decomposeRigTransform(j.matrix, j.pos, j.rot, j.scale)
+      if (j.validRot) j.rot.normalize()
+      else j.rot.copy(j.rest.restWorldQuat)
       j.localPos.copy(j.node.position)
       j.localRot.copy(j.node.quaternion)
       j.localScale.copy(j.node.scale)
@@ -216,11 +219,13 @@ class MouthTransfer {
 
 export class RetargetEngine {
   private readonly targets: Joint[]
+  private readonly weaponTarget?: Joint
   private readonly motion: SampledRig
   private secondary?: SampledRig
   private secondaryMouths?: MouthTransfer
   private readonly actorMouths: Mouth[]
   private readonly motionMouths: MouthTransfer
+  readonly manualOnlyTargets: ReadonlySet<string>
   readonly targetNames: string[]
   readonly sourceNames: string[]
   readonly animations: AnimationClip[]
@@ -229,6 +234,7 @@ export class RetargetEngine {
   private startWindow = 0
   private sequenceEnd?: string
   private chained = false
+  private readonly hiddenDriverGroups: Object3D[] = []
   private nativeModified = false
   private lastRig?: RigSettings
   private springExclusions = new Set<Object3D>()
@@ -254,6 +260,12 @@ export class RetargetEngine {
     this.animations = [...clips.values()]
     this.motion = new SampledRig(driverModel)
     this.targets = indexRig(actorModel)
+    this.weaponTarget = this.targets.find((joint) => joint.character && joint.key === 'bip001_weapon')
+    this.manualOnlyTargets = new Set(
+      this.targets
+        .filter((j) => actorModel !== driverModel && j.group === 'secondary')
+        .map((j) => j.node.name),
+    )
     this.targetNames = this.targets.map((j) => j.node.name)
     this.sourceNames = [...this.motion.byName.keys()]
     this.actorMouths = mouths(actorModel)
@@ -265,9 +277,14 @@ export class RetargetEngine {
         ...driverModel.haloNodes,
         ...driverModel.mouthMeshes,
         ...driverModel.weaponMeshes,
-      ])
-        node.visible = false
-      for (const mesh of actorModel.propMeshes) mesh.visible = false
+      ]) {
+        if (node instanceof Mesh) driverModel.setPartEnabled(node, false)
+        else if (node.visible) {
+          node.visible = false
+          this.hiddenDriverGroups.push(node)
+        }
+      }
+      for (const mesh of actorModel.propMeshes) actorModel.setPartEnabled(mesh, false)
     }
   }
   setClip(name: string, chain = false, end?: string, startWindow = 0) {
@@ -298,6 +315,9 @@ export class RetargetEngine {
   private sourceJoint(j: Joint, rig: RigSettings, source: SampledRig) {
     const explicit = rig.overrides[j.node.name]?.source
     if (explicit) return source.byName.get(explicit)
+    // A shared accessory name does not imply a compatible bind frame. A manual
+    // rotation alone is an offset from A's rest pose, independent of B's bones.
+    if (this.manualOnlyTargets.has(j.node.name)) return undefined
     return source.byKey.get(rig.mirror ? j.mirroredKey : j.key)
   }
   private configure(rig: RigSettings) {
@@ -305,7 +325,13 @@ export class RetargetEngine {
     const excluded = new Set<Object3D>()
     for (const j of this.targets) {
       const override = rig.overrides[j.node.name]
-      if (override || (!native && this.sourceJoint(j, rig, this.motion))) excluded.add(j.node)
+      if (
+        override?.source ||
+        override?.rotation ||
+        override?.muted ||
+        (!native && this.sourceJoint(j, rig, this.motion))
+      )
+        excluded.add(j.node)
     }
     if (
       !this.lastRig ||
@@ -323,7 +349,7 @@ export class RetargetEngine {
     }
     this.spring.settings = rig.spring
     if (!rig.spring.enabled || !this.lastRig?.spring.enabled) this.spring.reset()
-    for (const mesh of this.actorModel.weaponMeshes) mesh.visible = rig.showActorWeapon
+    this.actorModel.setWeaponsEnabled(rig.showActorWeapon)
     this.lastRig = rig
   }
 
@@ -344,6 +370,8 @@ export class RetargetEngine {
     )
     this.motion.player.sample(at?.clip, at?.time ?? 0)
     const native = this.actorModel === this.driverModel
+    this.driverModel.syncSwitchVisibility(at?.clip)
+    if (!native) this.actorModel.syncSwitchVisibility()
     const mixActor = Object.values(rig.mixer).includes('actorA')
     const direct =
       native &&
@@ -352,8 +380,19 @@ export class RetargetEngine {
       !Object.keys(rig.overrides).length &&
       Object.values(rig.mixer).every((mode) => mode === 'motionB') &&
       rig.offset.every((v) => v === 0)
+    let weaponCollapsed = false
     if (!direct) {
       this.motion.capture()
+      // Tethered weapon skins can also weight backpack joints that remain at bind pose.
+      if (
+        !native &&
+        this.weaponTarget &&
+        rig.mixer.weapon === 'motionB' &&
+        !rig.overrides[this.weaponTarget.node.name]
+      ) {
+        const scale = this.motion.byKey.get('bip001_weapon')?.scale
+        weaponCollapsed = !!scale && Math.min(Math.abs(scale.x), Math.abs(scale.y), Math.abs(scale.z)) < 0.05
+      }
       this.nativeModified = native
       if (mixActor) {
         if (!this.secondary) {
@@ -380,12 +419,13 @@ export class RetargetEngine {
         for (const m of this.actorMouths) copyWeights(m.mesh, m.bind)
       } else (rig.mixer.face === 'actorA' ? this.secondaryMouths : this.motionMouths)?.apply()
     }
+    this.actorModel.setWeaponsCollapsed(weaponCollapsed)
     if (rig.spring.enabled) this.spring.step(dt)
     if (!direct || rig.spring.enabled) this.actorModel.root.updateMatrixWorld(true)
   }
 
   private solveJoint(dst: Joint, rig: RigSettings) {
-    const { node, rest, key, group } = dst
+    const { node, rest, group } = dst
     const override = rig.overrides[node.name]
     // On a native rig, the mixer owns vehicle ancestors and their independent
     // visibility tracks. A character edit must not reset the turret or its props.
@@ -409,25 +449,8 @@ export class RetargetEngine {
     node.scale.copy(rest.restLocalScale)
     if (!override?.muted && mode !== 'rest' && (group !== 'face' || rig.expressionSync)) {
       if (src) {
-        node.parent!.updateWorldMatrix(true, false)
-        this.parent.multiplyMatrices(this.stageInverse, node.parent!.matrixWorld)
-        this.parent.decompose(this.pos, this.parentQ, this.scale)
-        this.parentQ.normalize().invert()
-        this.delta.copy(src.rot).multiply(src.inverseRest).normalize()
-        if (rig.mirror) this.reflect(this.delta)
-        node.quaternion.copy(this.parentQ).multiply(this.delta).multiply(rest.restWorldQuat).normalize()
-        if (key === 'bip001') {
-          this.solveRoot(dst, src, rigSource.model.hipRestHeight, rig)
-        } else if (key === 'bip001_weapon') {
-          this.weaponLocal.copy(src.matrix)
-          if (rig.mirror) this.weaponLocal.premultiply(this.reflection).multiply(this.reflection)
-          this.weaponLocal
-            .premultiply(this.parent.invert())
-            .decompose(node.position, node.quaternion, node.scale)
-          node.quaternion.normalize()
-        } else if (group === 'face') {
-          this.solveFace(dst, src, rig.mirror)
-        }
+        if (group === 'face') this.solveFace(dst, src, rig.mirror)
+        else this.solveWorldJoint(dst, src, rigSource.model.hipRestHeight, rig)
       }
       if (override?.rotation) {
         const [x, y, z] = override.rotation,
@@ -439,6 +462,37 @@ export class RetargetEngine {
     // for each ancestor. The next joint reads its already-solved parent.
     node.updateWorldMatrix(false, false)
   }
+  private solveWorldJoint(dst: Joint, src: Joint, height: number, rig: RigSettings) {
+    const { node, key } = dst
+    node.parent!.updateWorldMatrix(true, false)
+    this.parent.multiplyMatrices(this.stageInverse, node.parent!.matrixWorld)
+    if (!decomposeRigTransform(this.parent, this.pos, this.parentQ, this.scale)) return
+    if (key === 'bip001_weapon') {
+      this.weaponLocal.copy(src.matrix)
+      if (rig.mirror) this.weaponLocal.premultiply(this.reflection).multiply(this.reflection)
+      this.weaponLocal.premultiply(this.parent.invert())
+      if (src.validRot) {
+        this.weaponLocal.decompose(node.position, node.quaternion, node.scale)
+        node.quaternion.normalize()
+      } else {
+        // A collapsed grip still carries an authored position and scale.
+        node.position.setFromMatrixPosition(this.weaponLocal)
+        node.scale.setFromMatrixScale(this.weaponLocal)
+      }
+      return
+    }
+    if (src.validRot) {
+      this.delta.copy(src.rot).multiply(src.inverseRest).normalize()
+      if (rig.mirror) this.reflect(this.delta)
+      node.quaternion
+        .copy(this.parentQ.normalize().invert())
+        .multiply(this.delta)
+        .multiply(dst.rest.restWorldQuat)
+        .normalize()
+    }
+    if (key === 'bip001') this.solveRoot(dst, src, height, rig)
+  }
+
   private solveRoot(dst: Joint, src: Joint, height: number, rig: RigSettings) {
     if (rig.rootMode === 'ground-scaled') {
       this.pos.subVectors(src.pos, src.rest.restWorldPos)
@@ -460,6 +514,7 @@ export class RetargetEngine {
     const { node, rest } = dst
     this.pos.subVectors(src.localPos, src.rest.restLocalPos)
     this.delta.copy(src.localRot).multiply(this.offsetQ.copy(src.rest.restLocalQuat).invert()).normalize()
+    if (!src.validRot) this.delta.identity()
     if (mirror) {
       // Eye layers use model-specific local axes. Reflect in the character
       // frame and convert the result back into the target parent's bind frame.
@@ -485,8 +540,14 @@ export class RetargetEngine {
   }
   dispose() {
     this.spring.reset()
+    this.actorModel.setWeaponsCollapsed(false)
     if (this.nativeModified) this.motion.restoreNative()
     this.motion.player.dispose()
     this.secondary?.player.dispose()
+    if (this.actorModel !== this.driverModel) {
+      for (const group of this.hiddenDriverGroups) group.visible = true
+      for (const mesh of this.driverModel.meshGroups.keys()) this.driverModel.setPartEnabled(mesh, true)
+      this.driverModel.syncSwitchVisibility()
+    }
   }
 }

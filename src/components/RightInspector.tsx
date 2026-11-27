@@ -22,7 +22,7 @@ import {
   type CacheStats,
 } from '../services/modelCache'
 import { useActiveSlot, useStudioStore, useText } from '../store/useStudioStore'
-import { IconButton, Tabs, Toggle } from './shared'
+import { IconButton, SelectBox, Tabs, Toggle } from './shared'
 
 import { ExportInspector } from './ExportInspector'
 import { AdjustInspector } from './AdjustInspector'
@@ -162,8 +162,9 @@ function StageControls() {
       <Section title={t('environment')} icon={<Sun />}>
         <label className="select-row">
           <span>{t('background')}</span>
-          <select
+          <SelectBox
             value={stage.background}
+            displayLabel={t(stage.background)}
             onChange={(e) => set({ background: e.target.value as typeof stage.background })}
           >
             {(['studio', 'transparent', 'solid', 'chroma'] as const).map((k) => (
@@ -171,7 +172,7 @@ function StageControls() {
                 {t(k)}
               </option>
             ))}
-          </select>
+          </SelectBox>
         </label>
         {stage.background === 'solid' && (
           <label className="color-row">
@@ -214,7 +215,7 @@ export function RightInspector() {
       <IconButton
         className="reopen right glass"
         label={t('showInspector')}
-        onClick={() => set({ rightOpen: true, ...(window.innerWidth <= 900 ? { leftOpen: false } : {}) })}
+        onClick={() => set({ rightOpen: true })}
       >
         <PanelRightOpen size={19} />
       </IconButton>

@@ -67,13 +67,17 @@ function isolate(model: StudioModel, subset: string) {
   if (subset === 'whole') return
   const keep = new Set(subset === 'weapon' ? model.weaponMeshes : binding(model).groups.get(subset))
   if (!keep.size) throw new Error('missing_mesh_group')
-  for (const mesh of model.meshGroups.keys()) mesh.visible = keep.has(mesh)
+  for (const mesh of model.meshGroups.keys()) model.setPartEnabled(mesh, keep.has(mesh))
 }
 
 // Presentation edits must be removed before either the mixer or the retargeter
 // samples the next pose. This also prevents offsets accumulating on paused frames.
 export class SlotProps {
-  private originals = new Map<Object3D, { position: Vector3; rotation: Quaternion; scale: Vector3 }>()
+  private readonly originals = new WeakMap<
+    Object3D,
+    { position: Vector3; rotation: Quaternion; scale: Vector3 }
+  >()
+  private readonly editedGrips: Object3D[] = []
   private scratch = new Matrix4()
   private offset = new Matrix4()
   private target = new Matrix4()
@@ -83,18 +87,19 @@ export class SlotProps {
     readonly motion: StudioModel,
   ) {}
   restore() {
-    for (const [node, saved] of this.originals) {
+    for (const node of this.editedGrips) {
+      const saved = this.originals.get(node)!
       node.position.copy(saved.position)
       node.quaternion.copy(saved.rotation)
       node.scale.copy(saved.scale)
       node.updateWorldMatrix(true, true)
     }
-    this.originals.clear()
+    this.editedGrips.length = 0
   }
   apply(slot: Slot, donor?: StudioModel) {
     const w = slot.weapon
     for (const [name, meshes] of binding(this.motion).groups)
-      for (const mesh of meshes) mesh.visible = slot.embedded[name] !== false
+      for (const mesh of meshes) this.motion.setPartEnabled(mesh, slot.embedded[name] !== false)
     const model =
       w.source === 'actorA'
         ? this.actor
@@ -103,17 +108,16 @@ export class SlotProps {
           : w.source === 'donorC'
             ? donor
             : undefined
-    for (const entry of new Set([this.actor, this.motion, donor])) {
-      if (entry)
-        for (const mesh of entry.weaponMeshes)
-          mesh.visible = entry === model && (w.source !== 'actorA' || slot.rig.showActorWeapon)
-    }
+    const enabled = w.source !== 'actorA' || slot.rig.showActorWeapon
+    this.actor.setWeaponsEnabled(this.actor === model && enabled)
+    if (this.motion !== this.actor) this.motion.setWeaponsEnabled(this.motion === model && enabled)
+    donor?.setWeaponsEnabled(donor === model && enabled)
     if (!model) return
     const motion = binding(this.motion),
       actor = binding(this.actor)
     const hand = actor.bones.get('bip001_r_hand')
     this.transform.position.fromArray(w.position)
-    this.transform.rotation.set(...(w.rotation.map((v) => v * rad) as [number, number, number]))
+    this.transform.rotation.set(w.rotation[0] * rad, w.rotation[1] * rad, w.rotation[2] * rad)
     this.transform.scale.setScalar(w.scale)
     this.transform.updateMatrix()
     this.offset.copy(this.transform.matrix)
@@ -143,11 +147,15 @@ export class SlotProps {
       this.offset.elements[13] = w.position[1] / (Math.abs(bindScale?.y ?? 1) || 1)
       this.offset.elements[14] = w.position[2] / (Math.abs(bindScale?.z ?? 1) || 1)
       grip.updateMatrix()
-      this.originals.set(grip, {
-        position: grip.position.clone(),
-        rotation: grip.quaternion.clone(),
-        scale: grip.scale.clone(),
-      })
+      let saved = this.originals.get(grip)
+      if (!saved) {
+        saved = { position: new Vector3(), rotation: new Quaternion(), scale: new Vector3() }
+        this.originals.set(grip, saved)
+      }
+      saved.position.copy(grip.position)
+      saved.rotation.copy(grip.quaternion)
+      saved.scale.copy(grip.scale)
+      this.editedGrips.push(grip)
       this.scratch.copy(grip.parent.matrixWorld).invert().multiply(this.target).multiply(this.offset)
       if (this.scratch.determinant() === 0) {
         grip.position.setFromMatrixPosition(this.scratch)
@@ -172,6 +180,11 @@ interface Item {
 }
 export class PropManager {
   private items = new Map<string, Item>()
+  private readonly retained = new Set<string>()
+  private readonly gripLocal = new Matrix4()
+  private readonly position = new Vector3()
+  private readonly rotation = new Quaternion()
+  private readonly scale = new Vector3()
   constructor(
     private scene: Object3D,
     private loader: ModelLoader,
@@ -281,8 +294,9 @@ export class PropManager {
     slots: Map<number, { group: Group; actor?: StudioModel; driver?: StudioModel; props?: SlotProps }>,
     resolve: (id: string) => File | string | undefined,
   ) {
-    const s = store.getState(),
-      retained = new Set<string>()
+    const s = store.getState()
+    const retained = this.retained
+    retained.clear()
     for (const slot of s.slots) {
       const source = slot.weapon.source === 'donorC' && resolve(slot.weapon.donor)
       if (!source) continue
@@ -305,6 +319,7 @@ export class PropManager {
             ? time % clip.duration
             : Math.min(time, clip?.duration ?? 0)
         item.player?.sample(clip, at)
+        item.model?.syncSwitchVisibility(clip)
       }
     }
     for (const slot of s.slots) slots.get(slot.id)?.props?.apply(slot, this.donor(slot.id))
@@ -324,19 +339,17 @@ export class PropManager {
             ? time % clip.duration
             : Math.min(time, clip.duration)
         item.player?.sample(clip, at)
+        item.model?.syncSwitchVisibility(clip)
       }
       if (item.model && prop.subset === 'weapon') {
         // Keep the donor grip at the mount origin as its internal bones animate.
         const grip = binding(item.model).grips[0]
         if (grip) {
           grip.updateWorldMatrix(true, false)
-          const local = new Matrix4().copy(item.content.matrixWorld).invert().multiply(grip.matrixWorld)
-          const pos = new Vector3(),
-            rot = new Quaternion(),
-            scale = new Vector3()
+          const local = this.gripLocal.copy(item.content.matrixWorld).invert().multiply(grip.matrixWorld)
           if (local.determinant() !== 0) {
-            local.decompose(pos, rot, scale)
-            item.content.matrix.compose(pos, rot.normalize(), scale.set(1, 1, 1)).invert()
+            local.decompose(this.position, this.rotation, this.scale)
+            item.content.matrix.compose(this.position, this.rotation.normalize(), this.scale.setScalar(1)).invert()
             item.content.updateMatrixWorld(true)
           }
         }
@@ -360,7 +373,7 @@ export class PropManager {
       const scale = actor.rest.get(bone)!.restWorldScale
       item.anchor.matrix
         .copy(bone.matrixWorld)
-        .scale(new Vector3(1 / (scale.x || 1), 1 / (scale.y || 1), 1 / (scale.z || 1)))
+        .scale(this.scale.set(1 / (scale.x || 1), 1 / (scale.y || 1), 1 / (scale.z || 1)))
     }
     applyTransform(item.handle, prop)
     if (prop.subset !== 'weapon') {

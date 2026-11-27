@@ -3,7 +3,7 @@ import { Box, Crosshair, Layers3, RotateCcw, Trash2 } from 'lucide-react'
 import { identityTransform, type MountedProp, type WeaponSettings } from '../engine/PropTypes'
 import { useActiveSlot, useStudioStore, useText } from '../store/useStudioStore'
 import { AxisSliders, BoneSelect, ModelSelect } from './InteractionControls'
-import { Toggle, IconButton, useModelLabel } from './shared'
+import { Toggle, IconButton, SelectBox, useModelLabel } from './shared'
 
 function MountedList() {
   const t = useText(),
@@ -56,11 +56,15 @@ function MountedList() {
                   />
                   <label className="select-row">
                     {t('clips')}
-                    <select value={p.clip} onChange={(e) => edit(p, { clip: e.target.value })}>
+                    <SelectBox
+                      value={p.clip}
+                      displayLabel={p.clip}
+                      onChange={(e) => edit(p, { clip: e.target.value })}
+                    >
                       {p.clips.map((c) => (
                         <option key={c.name}>{c.name}</option>
                       ))}
-                    </select>
+                    </SelectBox>
                   </label>
                 </>
               )}
@@ -176,13 +180,14 @@ export function WeaponControls() {
             <summary>{t('gripOffset')}</summary>
             <label className="select-row">
               {t('attachMode')}
-              <select
+              <SelectBox
                 value={w.attach}
+                displayLabel={t(w.attach === 'weaponTrack' ? 'followWeapon' : 'snapHand')}
                 onChange={(e) => weapon({ attach: e.target.value as WeaponSettings['attach'] })}
               >
                 <option value="weaponTrack">{t('followWeapon')}</option>
                 <option value="rightHand">{t('snapHand')}</option>
-              </select>
+              </SelectBox>
             </label>
             <AxisSliders
               label={t('rootOffset')}

@@ -169,13 +169,14 @@ export class SceneManager {
     this.controls.maxDistance = 40
     this.controls.maxPolarAngle = Math.PI * 0.53
     const { key, fill, rim, hemisphere, ambient } = this.lights
-    key.position.set(3, 6, 4)
-    fill.position.set(-4, 2, 2)
-    rim.position.set(2, 3, -4)
+    key.position.set(2.4, 4.2, 4.0)
+    fill.position.set(-3.2, 2.0, 2.5)
+    rim.position.set(-1.6, 3.2, -3.6)
     key.castShadow = true
     key.shadow.mapSize.set(2048, 2048)
     Object.assign(key.shadow.camera, { left: -5, right: 5, top: 5, bottom: -5, near: 0.1, far: 20 })
     key.shadow.camera.updateProjectionMatrix()
+    key.shadow.radius = 2.5
     key.shadow.normalBias = 0.006
     this.scene.add(key, fill, rim, hemisphere, ambient)
     this.floor.receiveShadow = true
@@ -268,6 +269,7 @@ export class SceneManager {
       clips: engine.animations.map(describeClip),
       actorClips: actor.clips,
       targetNames: engine.targetNames,
+      manualOnlyTargets: engine.manualOnlyTargets,
       sourceNames: engine.sourceNames,
       propGroups: propGroupNames(engine.driverModel),
       attachmentNames: attachmentNames(actor),
@@ -300,9 +302,6 @@ export class SceneManager {
       entry.actorSource = source
       entry.actor = actor
       entry.driver = native ? undefined : motion
-      if (native)
-        for (const node of [...actor.bodyMeshes, ...actor.mouthMeshes, ...actor.haloNodes])
-          node.visible = true
       if (actor.root.parent !== entry.group) entry.group.add(actor.root)
       styleModel(actor, store.getState().stage)
       this.bindSlot(id, entry, actor)

@@ -14,7 +14,7 @@ import { normalizeSearch } from '../services/wikiCatalog'
 import { useActiveSlot, useStudioStore, useText } from '../store/useStudioStore'
 import type { MessageKey } from '../i18n'
 import { BoneSelect, DropFiles, ModelSelect } from './InteractionControls'
-import { IconButton, useModelLabel } from './shared'
+import { IconButton, SelectBox, useModelLabel } from './shared'
 
 function PackImport() {
   const t = useText(),
@@ -104,6 +104,9 @@ function borrow(id: string, subset: string, clip = '', slotId: number | null = n
   s.selectProp(prop.id)
   s.updateUI({ right: 'adjust', rightOpen: typeof window === 'undefined' || window.innerWidth > 900 })
 }
+function meshOptionLabel(name: string, index: number, t: ReturnType<typeof useText>) {
+  return meshLabel(name, index, t) + ' · ' + name
+}
 function PropRow({ model }: { model: PropModel }) {
   const t = useText(),
     label = useModelLabel(),
@@ -129,17 +132,18 @@ function PropRow({ model }: { model: PropModel }) {
       <b>{label(model.id)}</b>
       <small>{model.tags.map((tag) => t(tag)).join(' · ')}</small>
       {model.meshes.length > 1 && (
-        <select
+        <SelectBox
           aria-label={t('meshGroup') + ' · ' + label(model.id)}
           value={selection}
+          displayLabel={meshOptionLabel(selection, model.meshes.indexOf(selection), t)}
           onChange={(e) => setSelection(e.target.value)}
         >
           {model.meshes.map((mesh, i) => (
             <option key={mesh} value={mesh}>
-              {meshLabel(mesh, i, t)} · {mesh}
+              {meshOptionLabel(mesh, i, t)}
             </option>
           ))}
-        </select>
+        </SelectBox>
       )}
       <div className="asset-actions">
         <button onClick={useMotion}>{t('loadMotionProp')}</button>
@@ -162,6 +166,8 @@ function DonorBrowser() {
     [status, setStatus] = useState<'idle' | 'loading' | 'error'>('idle')
   const [target, setTarget] = useState<{ id: number | null; bone: string }>({ id: null, bone: 'world' })
   const pending = useRef<AbortController | null>(null)
+  const donorMeshLabel = (name: string, index: number) =>
+    name === 'weapon' ? t('weapon') : meshOptionLabel(name, index, t)
   useEffect(() => () => pending.current?.abort(), [])
   async function inspect() {
     pending.current?.abort()
@@ -206,13 +212,18 @@ function DonorBrowser() {
       </button>
       {choices &&
         (choices.length ? (
-          <select aria-label={t('meshGroup')} value={subset} onChange={(e) => setSubset(e.target.value)}>
+          <SelectBox
+            aria-label={t('meshGroup')}
+            value={subset}
+            displayLabel={donorMeshLabel(subset, choices.indexOf(subset))}
+            onChange={(e) => setSubset(e.target.value)}
+          >
             {choices.map((name, i) => (
               <option key={name} value={name}>
-                {name === 'weapon' ? t('weapon') : meshLabel(name, i, t) + ' · ' + name}
+                {donorMeshLabel(name, i)}
               </option>
             ))}
-          </select>
+          </SelectBox>
         ) : (
           <small>{t('noProps')}</small>
         ))}

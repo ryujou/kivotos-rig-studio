@@ -80,10 +80,19 @@ export async function exportClip(
   const { settings, timeline, stage, theme, viewport } = input
   const { fps } = settings
   const { frames, start, step } = clipTiming(timeline, fps)
-  if (!frames) throw Error('stageUnavailable')
-  if (format === 'webm' && !webmMime()) throw Error('webmUnavailable')
   const crop = cropRect(viewport, settings.aspect)
-  const { width, height } = outputSize(crop, settings.resolution, viewport.dpr)
+  const canvas = scene.canvas
+  if (
+    !frames || viewport.width <= 0 || viewport.height <= 0 ||
+    crop.width <= 0 || crop.height <= 0 || canvas.width <= 0 || canvas.height <= 0
+  ) throw Error('stageUnavailable')
+  if (format === 'webm' && !webmMime()) throw Error('webmUnavailable')
+  const native = settings.resolution === 'original'
+  let { width, height } = outputSize(crop, settings.resolution, viewport.dpr)
+  if (native) {
+    width = Math.min(canvas.width, width)
+    height = Math.min(canvas.height, height)
+  }
   const output = document.createElement('canvas')
   output.width = width
   output.height = height
@@ -92,14 +101,12 @@ export async function exportClip(
   ctx.imageSmoothingQuality = 'high'
   const background = settings.background === 'stage' ? stage.background : settings.background
   const transparent = background === 'transparent'
-  const canvas = scene.canvas
   const sx = canvas.width / viewport.width,
     sy = canvas.height / viewport.height
-  const native = settings.resolution === 'original'
   ctx.imageSmoothingEnabled = !native
   // Snap native captures to texel boundaries so fractional CSS crop coordinates cannot blur edges.
-  const sourceX = native ? Math.min(canvas.width - width, Math.round(crop.x * sx)) : crop.x * sx
-  const sourceY = native ? Math.min(canvas.height - height, Math.round(crop.y * sy)) : crop.y * sy
+  const sourceX = native ? Math.max(0, Math.min(canvas.width - width, Math.round(crop.x * sx))) : crop.x * sx
+  const sourceY = native ? Math.max(0, Math.min(canvas.height - height, Math.round(crop.y * sy))) : crop.y * sy
   // Reproduce CSS radial-gradient(ellipse farthest-corner at 50% 42%) in
   // viewport coordinates, then crop it with exactly the same transform as WebGL.
   if (background === 'studio') {
@@ -145,6 +152,14 @@ export async function exportClip(
     )
   }
   const restore = scene.beginCapture(background)
+  // A replacement export can acquire the same scene before the aborted promise settles.
+  let released = false
+  const release = () => {
+    if (released) return
+    released = true
+    restore()
+  }
+  signal.addEventListener('abort', release, { once: true })
   let channel: ReturnType<typeof workerChannel> | undefined
   let video: ReturnType<typeof recordWebm> | undefined
   try {
@@ -223,7 +238,8 @@ export async function exportClip(
       channel?.close()
       video?.close()
     } finally {
-      restore()
+      signal.removeEventListener('abort', release)
+      release()
     }
   }
 }

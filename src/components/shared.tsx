@@ -1,9 +1,29 @@
-import type { ButtonHTMLAttributes, ReactNode } from 'react'
-import { UserRound } from 'lucide-react'
+import { useCallback, useState, type CSSProperties, type ButtonHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from 'react'
+import { ChevronDown, UserRound } from 'lucide-react'
 import { portraitColumns, portraitIndex, portraitRows } from '../data/portraits'
+import { standingArtFrame, standingArtUrl } from '../data/standingArt'
 import { modelLabel, snapshotModels } from '../services/wikiCatalog'
 import { useStudioStore, useText } from '../store/useStudioStore'
 import type { MessageKey } from '../i18n'
+
+export function SelectBox({
+  displayLabel,
+  chevronSize = 12,
+  className,
+  disabled,
+  children,
+  ...selectProps
+}: SelectHTMLAttributes<HTMLSelectElement> & { displayLabel: string; chevronSize?: number }) {
+  return (
+    <span className={'select-box' + (disabled ? ' disabled' : '') + (className ? ' ' + className : '')}>
+      <span className="select-value" aria-hidden="true">{displayLabel}</span>
+      <ChevronDown className="select-chevron" size={chevronSize} aria-hidden="true" />
+      <select {...selectProps} disabled={disabled}>
+        {children}
+      </select>
+    </span>
+  )
+}
 
 export function IconButton({
   label,
@@ -24,7 +44,7 @@ export function IconButton({
 }
 export function Portrait({ id }: { id: string }) {
   const index = portraitIndex[id]
-  if (index === undefined)
+  if (!Object.hasOwn(portraitIndex, id))
     return (
       <span className="portrait empty">
         <UserRound />
@@ -40,6 +60,39 @@ export function Portrait({ id }: { id: string }) {
       }}
     />
   )
+}
+function StandingArtImage({ id }: { id: string }) {
+  const url = standingArtUrl(id)
+  const [status, setStatus] = useState<'loading' | 'loaded' | 'failed'>('loading')
+  const [cx, top, height] = standingArtFrame(id)
+  const checkCached = useCallback((img: HTMLImageElement | null) => {
+    if (img?.complete && img.naturalWidth > 0) setStatus('loaded')
+  }, [])
+  if (!url || status === 'failed')
+    return (
+      <span className="portrait-medallion">
+        <Portrait id={id} />
+      </span>
+    )
+  return (
+    <img
+      ref={checkCached}
+      className="standing-art"
+      style={{ '--art-cx': cx + '%', '--art-top': top + '%', '--art-h': height + '%' } as CSSProperties}
+      data-loaded={status === 'loaded'}
+      src={url}
+      alt=""
+      loading="lazy"
+      decoding="async"
+      referrerPolicy="no-referrer"
+      draggable={false}
+      onLoad={() => setStatus('loaded')}
+      onError={() => setStatus('failed')}
+    />
+  )
+}
+export function StandingArt({ id }: { id: string }) {
+  return <StandingArtImage key={id} id={id} />
 }
 export function useModelLabel() {
   const models = useStudioStore((s) => s.models),

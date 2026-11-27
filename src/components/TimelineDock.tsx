@@ -4,10 +4,10 @@ import {
   type KeyboardEvent as ReactKeyEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react'
-import { ChevronDown, Link2, Pause, Play, Repeat2 } from 'lucide-react'
+import { Link2, Pause, Play, Repeat2 } from 'lucide-react'
 import { useStudioStore, useText } from '../store/useStudioStore'
 import { clipTiming } from '../engine/exportSpec'
-import { IconButton } from './shared'
+import { IconButton, SelectBox } from './shared'
 
 type Thumb = 'trimStart' | 'time' | 'trimEnd'
 
@@ -58,11 +58,11 @@ export function TimelineDock() {
     const hit = (event.target as HTMLElement).closest<HTMLElement>('[data-thumb]')
     const thumb = (hit?.dataset.thumb ?? 'time') as Thumb
     const handle = axis.current.querySelector<HTMLElement>(`[data-thumb="${thumb}"]`)!
-    const rect = handle.getBoundingClientRect()
+    const rect = axis.current.getBoundingClientRect()
     drag.current = {
       id: event.pointerId,
       thumb,
-      offset: hit ? event.clientX - (rect.left + rect.width / 2) : 0,
+      offset: hit ? event.clientX - (rect.left + rect.width * values[thumb] / duration) : 0,
     }
     event.preventDefault()
     handle.focus({ preventScroll: true })
@@ -147,20 +147,20 @@ export function TimelineDock() {
           <Link2 size={14} />
           <span>{chainLabel}</span>
         </button>
-        <label className="speed-select">
-          <select
-            aria-label={t('speed')}
-            value={speed}
-            onChange={(e) => set({ speed: Number(e.target.value) })}
-          >
-            {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 2].map((v) => (
-              <option value={v} key={v}>
-                {v}×
-              </option>
-            ))}
-          </select>
-          <ChevronDown size={10} />
-        </label>
+        <SelectBox
+          className="speed-select-box"
+          aria-label={t('speed')}
+          chevronSize={10}
+          value={speed}
+          displayLabel={speed + '×'}
+          onChange={(e) => set({ speed: Number(e.target.value) })}
+        >
+          {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 2].map((v) => (
+            <option value={v} key={v}>
+              {v}×
+            </option>
+          ))}
+        </SelectBox>
         <time>
           <b>{time.toFixed(2)}</b>
           <span> / {duration.toFixed(2)} s</span>

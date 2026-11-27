@@ -75,6 +75,7 @@ export interface SlotRuntime {
   attachmentNames: string[]
   donorError?: boolean
   propGroups: string[]
+  manualOnlyTargets?: ReadonlySet<string>
   targetNames: string[]
   sourceNames: string[]
 }
@@ -135,6 +136,7 @@ const firstLanguage =
   languages.find((lang) => lang === preference) ?? languages.find((lang) => lang === browserLanguage) ?? 'en'
 
 interface UI {
+  guideOpen: boolean
   left: LeftTab
   right: InspectorTab
   leftOpen: boolean
@@ -272,6 +274,7 @@ export const useStudioStore = create<StudioState>((set, get) => {
     theme: readPreference('theme') === 'dark' ? 'dark' : 'light',
     recentPicks: [],
     ui: {
+      guideOpen: false,
       left: 'characters',
       right: 'adjust',
       leftOpen: !mobile,
@@ -287,7 +290,7 @@ export const useStudioStore = create<StudioState>((set, get) => {
     activeId: 1,
     runtime: {},
     stage: {
-      lighting: { key: 1.65, fill: 0.9, rim: 1.25, hemisphere: 1.15, ambient: 0.35 },
+      lighting: { key: 1.7, fill: 0.55, rim: 0.35, hemisphere: 1.2, ambient: 0.45 },
       shading: 'unlit',
       outline: true,
       width: 25,
@@ -338,15 +341,14 @@ export const useStudioStore = create<StudioState>((set, get) => {
         return slot
       })
       const s = get()
-      const props = s.props.filter((p) => p.slotId === null)
       set({
         slots,
         runtime: {},
         activeId: 1,
         selectedProp: null,
-        props,
+        props: [],
         camera: { preset: 'group', revision: s.camera.revision + 1 },
-        timeline: resetTime({ ...s.timeline, chainStartEnd: true }, stageDuration(slots, {}, true, props)),
+        timeline: resetTime({ ...s.timeline, chainStartEnd: true }, 0),
         joint: {
           comboId: combo.id,
           chain: true,
@@ -398,6 +400,10 @@ export const useStudioStore = create<StudioState>((set, get) => {
     updateUI: (value) =>
       set((s) => {
         const ui = { ...s.ui, ...value }
+        if (typeof window !== 'undefined' && window.innerWidth <= 900) {
+          if (value.leftOpen) ui.rightOpen = false
+          else if (value.rightOpen) ui.leftOpen = false
+        }
         const openingExport =
           ui.rightOpen && ui.right === 'export' && (!s.ui.rightOpen || s.ui.right !== 'export')
         return {
@@ -470,6 +476,7 @@ export const useStudioStore = create<StudioState>((set, get) => {
           embedded: {},
           actor: s.motion,
           motion: s.actor,
+          socket: undefined,
           externalClips: [],
           rig: { ...s.rig, overrides: {}, selectedBone: '', secondaryClip: '' },
         })
@@ -486,6 +493,7 @@ export const useStudioStore = create<StudioState>((set, get) => {
         embedded: {},
         actor: id,
         motion: id,
+        socket: undefined,
         clip: 'Cafe_Reaction',
         rig: defaultRig(),
         externalClips: [],
@@ -502,11 +510,14 @@ export const useStudioStore = create<StudioState>((set, get) => {
         }),
       }))
     },
-    setClip: (name) =>
-      updateActive({
-        clip: name,
-        endClip: get().joint.members.find((m) => m.slotId === get().activeId && m.start === name)?.end,
-      }),
+    setClip(name) {
+      const { slots, activeId, joint } = get()
+      const slot = slots.find((s) => s.id === activeId)!
+      const member = joint.members.find(
+        (m) => m.slotId === activeId && m.start === name && m.modelId === slot.motion,
+      )
+      updateActive({ clip: name, endClip: member?.end })
+    },
     updateRuntime(id, data) {
       set((s) => {
         if (!s.slots.some((slot) => slot.id === id)) return s

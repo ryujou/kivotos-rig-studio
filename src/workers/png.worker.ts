@@ -10,11 +10,11 @@ self.onmessage = ({
     if (data.type === 'frame') {
       files['frame_' + String(++count).padStart(4, '0') + '.png'] = data.png
       self.postMessage({ type: 'ready' } satisfies WorkerReply)
-    } else {
+    } else if (data.type === 'finish' && count > 0) {
       // PNGs are already compressed. A fixed archive timestamp makes repeated exports identical.
       const bytes = zipSync(files, { level: 0, mtime: new Date(2000, 0, 1) })
       self.postMessage({ type: 'done', bytes }, { transfer: [bytes.buffer] })
-    }
+    } else throw Error('invalid_sequence')
   } catch {
     self.postMessage({ type: 'error' } satisfies WorkerReply)
   }

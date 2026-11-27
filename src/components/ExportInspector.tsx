@@ -1,7 +1,7 @@
 import { Aperture, Download, Film, Focus, Images, Palette, Scan, Scissors } from 'lucide-react'
 import { useStudioStore, useText } from '../store/useStudioStore'
 import { startExport } from '../store/exportSession'
-import { Toggle } from './shared'
+import { SelectBox, Toggle } from './shared'
 import { useOutputSpec } from './CropOverlay'
 import { webmMime } from '../engine/webm'
 
@@ -127,8 +127,9 @@ export function ExportInspector() {
         )}
         <label className="select-row">
           <span>{t('palette')}</span>
-          <select
+          <SelectBox
             value={settings.quality}
+            displayLabel={t(settings.quality)}
             onChange={(e) => set({ quality: e.target.value as typeof settings.quality })}
           >
             {(['fast', 'balanced', 'crisp'] as const).map((q) => (
@@ -136,7 +137,7 @@ export function ExportInspector() {
                 {t(q)}
               </option>
             ))}
-          </select>
+          </SelectBox>
         </label>
         <Toggle
           label={t('viewfinder')}
