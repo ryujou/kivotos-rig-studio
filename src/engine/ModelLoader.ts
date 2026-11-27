@@ -153,6 +153,7 @@ export class StudioModel {
   private visibilityClip?: AnimationClip
   readonly restMouthWeights = new Map<Mesh, number[]>()
   readonly restMorphWeights = new Map<Mesh, number[]>()
+  readonly restGroundOffset = new Vector3()
   readonly hipRestHeight: number
   readonly bounds = new Box3()
   readonly clips: ClipInfo[]
@@ -234,8 +235,14 @@ export class StudioModel {
         .trim()
       this.labels.set(mesh, label || mesh.name)
       if (mesh instanceof SkinnedMesh) mesh.frustumCulled = false
-      const name = group || ancestry.join(' ')
-      if (mouth) {
+      const summonName = [group, mesh.name].find((n) => /^SM\d+/i.test(n))
+      const name = summonName || group || ancestry.join(' ')
+      const namedWeapon = /weapon/i.test(name) && !/shield_weapon|weapon_can/i.test(name)
+      if (summonName) {
+        // Vehicle skins can share character joints, including the weapon grip.
+        if (namedWeapon) this.weaponMeshes.push(mesh)
+        else this.propMeshes.push(mesh)
+      } else if (mouth) {
         this.mouthMeshes.push(mesh)
         this.restMouthWeights.set(mesh, this.restMorphWeights.get(mesh)!)
       } else if (/halo/i.test(name) || ancestry.some((n) => /halo/i.test(n))) {
@@ -243,7 +250,7 @@ export class StudioModel {
       } else if (/body|(?:^|_)(?:face|hair|eyebrow|eyemouth)\d*(?:_|$)|^faceCH|^CH\d+(?:_Mesh)?$/i.test(name))
         this.bodyMeshes.push(mesh)
       else if (
-        (/weapon/i.test(name) && !/shield_weapon|weapon_can/i.test(name)) ||
+        namedWeapon ||
         (!surveyedProps.has(name) &&
           !/bag|prop|instrument|tank|bike/i.test(name) &&
           mesh instanceof SkinnedMesh &&
@@ -257,10 +264,21 @@ export class StudioModel {
         for (const value of Object.values(mat)) if (value instanceof Texture) value.anisotropy = anisotropy
       }
     })
-    const hip = [...this.rest.keys()].find((n) => canonicalBoneName(n.name) === 'bip001')
-    this.hipRestHeight = hip ? this.rest.get(hip)!.restWorldPos.y : 0
-    // Hidden bind-pose props can be metres away. Frame the character and halo.
-    this.expandVisibleBounds(this.bounds, [...this.bodyMeshes, ...this.haloNodes])
+    const nodes = [...this.rest.keys()]
+    const hip = nodes.find((n) => canonicalBoneName(n.name) === 'bip001')
+    const charRoot = nodes.find((n) => /^character_root$/i.test(n.name))
+    const hipPos = hip && this.rest.get(hip)!.restWorldPos
+    const rootZ = charRoot ? this.rest.get(charRoot)!.restWorldPos.z : 0
+    // The body's lowest bind-pose vertex can be on a vehicle seat above the stage floor.
+    this.expandVisibleBounds(this.bounds, this.bodyMeshes)
+    const groundY = !this.bounds.isEmpty() && Math.abs(this.bounds.min.y) > 0.05 ? this.bounds.min.y : 0
+    this.restGroundOffset.set(
+      hipPos && Math.abs(hipPos.x) > 0.05 ? hipPos.x : 0,
+      groundY,
+      Math.abs(rootZ) > 0.01 ? rootZ : 0,
+    )
+    this.hipRestHeight = hipPos ? hipPos.y - groundY : 0
+    this.expandVisibleBounds(this.bounds, this.haloNodes)
     if (this.bounds.isEmpty()) this.expandVisibleBounds(this.bounds)
     this.clips = animations.map(describeClip)
     this.outline = new OutlineEffect(root)
@@ -327,7 +345,7 @@ export class StudioModel {
   }
 
   setShading(mode: Shading) {
-    const substitute = (material: Material, prop: boolean, partName: string) => {
+    const substitute = (material: Material, accessory: boolean, partName: string) => {
       let pair = this.variants.get(material)
       if (!pair) {
         const source = material as MeshBasicMaterial
@@ -351,7 +369,7 @@ export class StudioModel {
       const name = partName + ' ' + material.name
       if (mode === 'softLit' && unlitPart.test(name)) return source
       const slate =
-        prop &&
+        accessory &&
         !source.map &&
         !source.transparent &&
         source.opacity === 1 &&
@@ -365,7 +383,7 @@ export class StudioModel {
         return (pair[key] ??= studioLambert(source, key === 'face', slate))
       }
       if (slate) {
-        // A body mesh can share this source material with an untextured prop.
+        // A body mesh can share this source material with an untextured accessory.
         return (pair.clay ??= new MeshLambertMaterial({
           color: 0xc7d2e0,
           side: source.side,
@@ -377,7 +395,7 @@ export class StudioModel {
       return source
     }
     for (const [mesh, original] of this.originals) {
-      const prop = this.propMeshes.includes(mesh)
+      const accessory = this.propMeshes.includes(mesh) || this.weaponMeshes.includes(mesh)
       const name = [
         mesh.name,
         this.meshGroups.get(mesh),
@@ -386,8 +404,8 @@ export class StudioModel {
         isBakedOutline(mesh) ? 'outline' : '',
       ].join(' ')
       mesh.material = Array.isArray(original)
-        ? original.map((material) => substitute(material, prop, name))
-        : substitute(original, prop, name)
+        ? original.map((material) => substitute(material, accessory, name))
+        : substitute(original, accessory, name)
     }
   }
   dispose() {

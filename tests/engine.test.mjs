@@ -232,6 +232,186 @@ test('soft lighting shades an Eyering prop', () => {
   assert.equal(type, 'MeshLambertMaterial', 'Eyering matched /eye/i false positive and stayed unlit!')
 })
 
+test('Sena’s SM vehicle body hides as an actor prop during cross-character playback', () => {
+  const root = new THREE.Group()
+  const ambulance = new THREE.Group()
+  ambulance.name = 'SM008101_Body'
+  root.add(ambulance)
+  const panel = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial())
+  panel.name = 'SM008101_Body_1'
+  ambulance.add(panel)
+  const body = panel.clone()
+  body.name = 'CH0081_Body'
+  const weapon = panel.clone()
+  weapon.name = 'SM008101_Weapon'
+  root.add(body, weapon)
+  const actor = new StudioModel(root, [], 1)
+  assert.deepEqual(actor.propMeshes, [panel])
+  assert.deepEqual(actor.bodyMeshes, [body])
+  assert.deepEqual(actor.weaponMeshes, [weapon])
+  assert.equal(panel.visible, true)
+  const driver = makeHumanoidModel()
+  const engine = new RetargetEngine(actor, driver)
+  engine.sample(0, 0, defaultRig())
+  assert.equal(panel.visible, false)
+  assert.equal(body.visible, true)
+  engine.dispose()
+  driver.dispose()
+  actor.dispose()
+})
+
+test('ground-scaled vehicle students use anatomical hip height while native and prop-locked poses keep the seat', () => {
+  const hipHeight = 0.362
+  const jump = 0.2
+  function student(rootPosition, localHip) {
+    const root = new THREE.Group()
+    const charRoot = new THREE.Object3D()
+    charRoot.name = 'character_root'
+    charRoot.position.fromArray(rootPosition)
+    root.add(charRoot)
+    const hip = new THREE.Bone()
+    hip.name = 'Bip001'
+    hip.position.fromArray(localHip)
+    charRoot.add(hip)
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.8, 0.3), new THREE.MeshBasicMaterial())
+    body.name = 'CH0156_Body'
+    body.position.y = 0.4 - hipHeight
+    hip.add(body)
+    const track = new THREE.VectorKeyframeTrack('Bip001.position', [0, 1], [
+      ...localHip, localHip[0], localHip[1] + jump, localHip[2],
+    ])
+    return new StudioModel(root, [makeClip('Jump', 1, [track])], 1)
+  }
+  function near(actual, expected) {
+    assert.ok(Math.abs(actual - expected) < 1e-6, `expected ${expected}, got ${actual}`)
+  }
+  const rider = student([0.253, 1.27, 0.049], [0, hipHeight, 0.038])
+  const walker = student([0, 0, 0], [0, hipHeight, 0.038])
+  const medic = student([0, 0.007, 0], [-0.741, hipHeight - 0.007, 0.038])
+  near(rider.hipRestHeight, hipHeight)
+  near(rider.restGroundOffset.x, 0.253)
+  near(rider.restGroundOffset.y, 1.27)
+  near(rider.restGroundOffset.z, 0.049)
+  assert.deepEqual(medic.restGroundOffset.toArray(), [-0.741, 0, 0])
+  const rig = defaultRig()
+  for (const actor of [rider, medic]) {
+    const engine = new RetargetEngine(actor, walker)
+    engine.setClip('Jump')
+    for (const time of [0, 1]) {
+      engine.sample(time, 0, rig)
+      const hip = actor.root.getObjectByName('Bip001').getWorldPosition(new THREE.Vector3())
+      near(hip.x, 0)
+      near(hip.y, hipHeight + time * jump)
+      near(hip.z, 0.038)
+      const feet = new THREE.Box3()
+      actor.expandVisibleBounds(feet, actor.bodyMeshes)
+      near(feet.min.y, time * jump)
+    }
+    engine.dispose()
+  }
+  const seatedHip = new THREE.Vector3(0.253, 1.27 + hipHeight + jump, 0.049 + 0.038)
+  const native = new RetargetEngine(rider)
+  native.setClip('Jump')
+  for (const mirror of [false, true]) {
+    native.sample(1, 0, { ...rig, mirror })
+    near(rider.root.getObjectByName('Bip001').getWorldPosition(new THREE.Vector3()).distanceTo(seatedHip), 0)
+  }
+  native.dispose()
+  const passenger = new RetargetEngine(walker, rider)
+  passenger.setClip('Jump')
+  passenger.sample(1, 0, rig)
+  near(walker.root.getObjectByName('Bip001').getWorldPosition(new THREE.Vector3()).y, hipHeight + jump)
+  passenger.sample(1, 0, { ...rig, rootMode: 'prop-locked' })
+  near(walker.root.getObjectByName('Bip001').getWorldPosition(new THREE.Vector3()).distanceTo(seatedHip), 0)
+  passenger.dispose()
+  walker.dispose()
+  rider.dispose()
+  medic.dispose()
+})
+
+test('Wakamo’s masked face tracks preserve the target eye and still transfer authored expression', () => {
+  const times = [0, 0.5, 1]
+  const clip = makeClip('Formation_Pickup', 1, [
+    new THREE.VectorKeyframeTrack('bone_eye_L.position', times, [0, 0, 0, 0, 0, 0, -0.04, 0.06, 0.08]),
+    new THREE.QuaternionKeyframeTrack('bone_eye_L.quaternion', times, [
+      0, 0, 0, 0, 0.00004, 0, 0, 0, 0, 0, 0.6, 0.8,
+    ]),
+    new THREE.VectorKeyframeTrack('bone_eye_L.scale', times, [0, 0, 0, 1, 1, 1, 0.0005, 0.5, 1.25]),
+  ])
+  const driver = makeHumanoidModel({ animations: [clip] })
+  const actor = makeHumanoidModel()
+  const eye = actor.root.getObjectByName('bone_eye_L')
+  const bind = actor.rest.get(eye)
+  const engine = new RetargetEngine(actor, driver)
+  engine.setClip(clip.name)
+  const rig = defaultRig()
+  for (const time of [0, 0.5]) {
+    engine.sample(time, 0, rig)
+    assert.ok(eye.position.equals(bind.restLocalPos))
+    assert.ok(eye.quaternion.equals(bind.restLocalQuat))
+    assert.ok(eye.scale.equals(bind.restLocalScale))
+  }
+  engine.sample(1, 0, rig)
+  assert.ok(eye.position.distanceTo(new THREE.Vector3(-0.04, 0.06, 0.08)) < 1e-6)
+  assert.ok(eye.quaternion.angleTo(new THREE.Quaternion(0, 0, 0.6, 0.8)) < 1e-6)
+  assert.deepEqual(eye.scale.toArray(), [1, 0.5, 1.25])
+  engine.dispose()
+  actor.dispose()
+  driver.dispose()
+})
+
+test('mirrored native pickup preserves hip height under a shrunken vehicle parent', () => {
+  const root = new THREE.Group()
+  const turret = new THREE.Object3D()
+  turret.name = 'character_root'
+  turret.position.y = 0.882
+  root.add(turret)
+  const hip = new THREE.Bone()
+  hip.name = 'Bip001'
+  hip.position.y = 0.364
+  turret.add(hip)
+  const clip = makeClip('Formation_Pickup', 1, [
+    new THREE.VectorKeyframeTrack('character_root.scale', [0], [0.00009, 0.00009, 0.00009]),
+    new THREE.VectorKeyframeTrack('Bip001.position', [0], [500, -5000, 0]),
+  ])
+  const model = new StudioModel(root, [clip], 1)
+  const native = new RetargetEngine(model)
+  native.setClip(clip.name)
+  const rig = defaultRig()
+  native.sample(0, 0, rig)
+  const authored = hip.getWorldPosition(new THREE.Vector3())
+  native.sample(0, 0, { ...rig, mirror: true })
+  const mirrored = hip.getWorldPosition(new THREE.Vector3())
+  assert.ok(Math.abs(mirrored.y - authored.y) < 1e-6)
+  assert.ok(Math.abs(mirrored.x + authored.x) < 1e-6)
+  native.dispose()
+  model.dispose()
+})
+
+test('Kanoe’s untextured white weapon uses slate in both shading modes even with a shared material', () => {
+  const root = new THREE.Group()
+  const geometry = new THREE.BoxGeometry()
+  const material = new THREE.MeshBasicMaterial({ color: 0xffffff })
+  const names = ['CH0306_Weapon_1', 'CH0306_Body', 'CH0306_Halo', 'Mouth_200']
+  const [gun, body, halo, mouth] = names.map((name) => {
+    const mesh = new THREE.Mesh(geometry, material)
+    mesh.name = name
+    root.add(mesh)
+    return mesh
+  })
+  const model = new StudioModel(root, [], 1, new Map([[gun, 'CH0306_Weapon']]))
+  assert.deepEqual(model.weaponMeshes, [gun])
+  for (const mode of ['unlit', 'softLit']) {
+    model.setShading(mode)
+    assert.ok(gun.material.isMeshLambertMaterial)
+    assert.equal(gun.material.color.getHex(), 0xc7d2e0)
+    for (const part of [body, halo, mouth]) assert.equal(part.material.color.getHex(), 0xffffff)
+    assert.equal(body.material.type, mode === 'unlit' ? 'MeshBasicMaterial' : 'MeshLambertMaterial')
+    assert.ok(halo.material.isMeshBasicMaterial && mouth.material.isMeshBasicMaterial)
+  }
+  model.dispose()
+})
+
 test('a baked outline mesh receives no generated hull', () => {
   const model = makeHumanoidModel({ name: 'CH0336', withBakedOutline: true })
   const bakedOutline = model.root.getObjectByName('CH0336_Face01_Outline')

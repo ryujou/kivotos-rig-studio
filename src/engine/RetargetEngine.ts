@@ -449,7 +449,7 @@ export class RetargetEngine {
     node.scale.copy(rest.restLocalScale)
     if (!override?.muted && mode !== 'rest' && (group !== 'face' || rig.expressionSync)) {
       if (src) {
-        if (group === 'face') this.solveFace(dst, src, rig.mirror)
+        if (group === 'face') this.solveFace(dst, src, rig.mirror, rigSource.model === this.actorModel)
         else this.solveWorldJoint(dst, src, rigSource.model.hipRestHeight, rig)
       }
       if (override?.rotation) {
@@ -466,7 +466,11 @@ export class RetargetEngine {
     const { node, key } = dst
     node.parent!.updateWorldMatrix(true, false)
     this.parent.multiplyMatrices(this.stageInverse, node.parent!.matrixWorld)
-    if (!decomposeRigTransform(this.parent, this.pos, this.parentQ, this.scale)) return
+    const validParentRotation = decomposeRigTransform(this.parent, this.pos, this.parentQ, this.scale)
+    // Pickup clips shrink the turret. Its matrix can still map positions at that scale.
+    if (key === 'bip001' && (validParentRotation || this.parent.determinantAffine() !== 0))
+      this.solveRoot(dst, src, height, rig)
+    if (!validParentRotation) return
     if (key === 'bip001_weapon') {
       this.weaponLocal.copy(src.matrix)
       if (rig.mirror) this.weaponLocal.premultiply(this.reflection).multiply(this.reflection)
@@ -490,7 +494,6 @@ export class RetargetEngine {
         .multiply(dst.rest.restWorldQuat)
         .normalize()
     }
-    if (key === 'bip001') this.solveRoot(dst, src, height, rig)
   }
 
   private solveRoot(dst: Joint, src: Joint, height: number, rig: RigSettings) {
@@ -500,6 +503,7 @@ export class RetargetEngine {
       this.pos
         .multiplyScalar(Math.abs(height) > 1e-6 ? this.actorModel.hipRestHeight / height : 1)
         .add(dst.rest.restWorldPos)
+      if (this.actorModel !== this.driverModel) this.pos.sub(this.actorModel.restGroundOffset)
     } else {
       this.pos.copy(src.pos)
       if (rig.mirror) this.pos.x *= -1
@@ -510,11 +514,15 @@ export class RetargetEngine {
     dst.node.position.copy(this.pos).applyMatrix4(this.parent.invert())
   }
 
-  private solveFace(dst: Joint, src: Joint, mirror: boolean) {
+  private solveFace(dst: Joint, src: Joint, mirror: boolean, sameModel: boolean) {
     const { node, rest } = dst
-    this.pos.subVectors(src.localPos, src.rest.restLocalPos)
-    this.delta.copy(src.localRot).multiply(this.offsetQ.copy(src.rest.restLocalQuat).invert()).normalize()
-    if (!src.validRot) this.delta.identity()
+    // Masked eye layers can have all-zero keys on otherwise nonzero bind transforms.
+    if (src.localPos.lengthSq() < 1e-10 && src.rest.restLocalPos.lengthSq() > 1e-6)
+      this.pos.set(0, 0, 0)
+    else this.pos.subVectors(src.localPos, src.rest.restLocalPos)
+    if (!src.validRot || src.localRot.lengthSq() < 1e-8) this.delta.identity()
+    else
+      this.delta.copy(src.localRot).multiply(this.offsetQ.copy(src.rest.restLocalQuat).invert()).normalize()
     if (mirror) {
       // Eye layers use model-specific local axes. Reflect in the character
       // frame and convert the result back into the target parent's bind frame.
@@ -530,8 +538,10 @@ export class RetargetEngine {
     node.position.add(this.pos)
     node.quaternion.copy(this.delta).multiply(rest.restLocalQuat).normalize()
     for (const axis of ['x', 'y', 'z'] as const) {
-      if (Math.abs(src.rest.restLocalScale[axis]) > 1e-8)
-        node.scale[axis] *= src.localScale[axis] / src.rest.restLocalScale[axis]
+      const scale = src.localScale[axis]
+      const bindScale = src.rest.restLocalScale[axis]
+      if (Math.abs(bindScale) > 1e-8 && (sameModel || Math.abs(scale) >= 1e-3))
+        node.scale[axis] *= scale / bindScale
     }
   }
 
