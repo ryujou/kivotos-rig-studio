@@ -130,10 +130,38 @@ function savePreference(key: string, value: string) {
     /* Private browsing. */
   }
 }
-const preference = readPreference('language')
-const browserLanguage = (globalThis.navigator?.language ?? 'en').split('-')[0].toLowerCase()
-const firstLanguage =
-  languages.find((lang) => lang === preference) ?? languages.find((lang) => lang === browserLanguage) ?? 'en'
+
+export function detectBrowserLanguage(
+  saved: string | null | undefined,
+  navLanguage?: string,
+  navLanguages?: readonly string[],
+): Language {
+  const preference = languages.find((lang) => lang === saved)
+  if (preference) return preference
+
+  const locale = navLanguage || navLanguages?.[0] || ''
+  switch (locale.split(/[-_]/, 1)[0].trim().toLowerCase()) {
+    case 'zh':
+    case 'cmn':
+    case 'yue':
+    case 'wuu':
+      return 'zh'
+    case 'ja':
+    case 'jp':
+      return 'ja'
+    case 'ko':
+    case 'kr':
+      return 'ko'
+    default:
+      return 'en'
+  }
+}
+
+const firstLanguage = detectBrowserLanguage(
+  readPreference('language'),
+  globalThis.navigator?.language,
+  globalThis.navigator?.languages,
+)
 
 interface UI {
   guideOpen: boolean

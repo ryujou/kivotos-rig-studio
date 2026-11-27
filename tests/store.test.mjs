@@ -1,11 +1,41 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { useStudioStore, initialRuntime, formationStartWindow } from '../src/store/useStudioStore.ts'
+import { detectBrowserLanguage, useStudioStore, initialRuntime, formationStartWindow } from '../src/store/useStudioStore.ts'
 import { newProp } from '../src/engine/PropTypes.ts'
 import { jointCombos } from '../src/data/jointCombos.ts'
 
 test.beforeEach(() => useStudioStore.setState(useStudioStore.getInitialState(), true))
 const findSlot = (slots, id) => slots.find((slot) => slot.id === id)
+
+test('detectBrowserLanguage maps the primary locale to a supported language', () => {
+  const locales = {
+    zh: ['zh-CN', 'zh-TW', 'zh_HK', 'cmn-Hans-CN', 'YUE_Hant_HK', 'wuu'],
+    ja: ['ja-JP', 'jp'],
+    ko: ['ko-KR', 'kr'],
+    en: ['en-US', 'fr-FR', 'de-DE', 'es-ES', 'ru-RU', 'pt-BR'],
+  }
+  for (const [expected, tags] of Object.entries(locales)) {
+    for (const tag of tags) {
+      assert.equal(detectBrowserLanguage(null, tag, ['zh-CN']), expected, tag)
+    }
+  }
+})
+
+test('detectBrowserLanguage falls back to the first browser language or English', () => {
+  assert.equal(detectBrowserLanguage(null, '', ['ko-KR']), 'ko')
+  assert.equal(detectBrowserLanguage(undefined, undefined, ['ja-JP']), 'ja')
+  assert.equal(detectBrowserLanguage(null, '', ['fr-FR', 'zh-TW']), 'en')
+  assert.equal(detectBrowserLanguage(null, '', []), 'en')
+  assert.equal(detectBrowserLanguage(undefined), 'en')
+})
+
+test('detectBrowserLanguage gives a saved language precedence over the browser locale', () => {
+  for (const saved of ['zh', 'ja', 'ko', 'en']) {
+    const browser = saved === 'zh' ? 'ja-JP' : 'zh-CN'
+    assert.equal(detectBrowserLanguage(saved, browser), saved)
+  }
+  assert.equal(detectBrowserLanguage('invalid', 'ko-KR'), 'ko')
+})
 
 test('useStudioStore: core actions, slots, formation, runtime, timeline, stage, export, props', () => {
   const s = useStudioStore.getState()
