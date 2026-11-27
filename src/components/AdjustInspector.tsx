@@ -1,5 +1,5 @@
 import { Crosshair, RotateCcw, Search } from 'lucide-react'
-import { WeaponControls, SceneOutliner } from './PropInspector'
+import { WeaponControls, HaloControls, SceneOutliner } from './PropInspector'
 import { useState } from 'react'
 import {
   bodyParts,
@@ -95,6 +95,7 @@ export function AdjustInspector() {
   return (
     <div className="inspector-scroll adjust-inspector">
       <WeaponControls />
+      <HaloControls />
       <section className="control-section">
         <h3>
           <Crosshair />

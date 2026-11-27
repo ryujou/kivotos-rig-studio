@@ -234,7 +234,6 @@ export class RetargetEngine {
   private startWindow = 0
   private sequenceEnd?: string
   private chained = false
-  private readonly hiddenDriverGroups: Object3D[] = []
   private nativeModified = false
   private lastRig?: RigSettings
   private springExclusions = new Set<Object3D>()
@@ -272,18 +271,10 @@ export class RetargetEngine {
     this.motionMouths = new MouthTransfer(this.actorMouths, this.motion.mouths)
     this.spring = new SpringBoneSolver([], actorModel.rest, this.springExclusions, defaultRig().spring)
     if (actorModel !== driverModel) {
-      for (const node of [
-        ...driverModel.bodyMeshes,
-        ...driverModel.haloNodes,
-        ...driverModel.mouthMeshes,
-        ...driverModel.weaponMeshes,
-      ]) {
-        if (node instanceof Mesh) driverModel.setPartEnabled(node, false)
-        else if (node.visible) {
-          node.visible = false
-          this.hiddenDriverGroups.push(node)
-        }
-      }
+      for (const mesh of [...driverModel.bodyMeshes, ...driverModel.mouthMeshes])
+        driverModel.setPartEnabled(mesh, false)
+      driverModel.setWeaponsEnabled(false)
+      driverModel.setHalosEnabled(false)
       for (const mesh of actorModel.propMeshes) actorModel.setPartEnabled(mesh, false)
     }
   }
@@ -555,7 +546,6 @@ export class RetargetEngine {
     this.motion.player.dispose()
     this.secondary?.player.dispose()
     if (this.actorModel !== this.driverModel) {
-      for (const group of this.hiddenDriverGroups) group.visible = true
       for (const mesh of this.driverModel.meshGroups.keys()) this.driverModel.setPartEnabled(mesh, true)
       this.driverModel.syncSwitchVisibility()
     }

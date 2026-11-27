@@ -26,12 +26,26 @@ export const defaultWeapon = (): WeaponSettings => ({
   rotation: [0, 0, 0],
   scale: 1,
 })
+export interface HaloSettings {
+  source: 'actorA' | 'motionB' | 'donorC' | 'hidden'
+  donor: string
+  position: Vec3
+  rotation: Vec3
+  scale: number
+}
+export const defaultHalo = (): HaloSettings => ({
+  source: 'actorA',
+  donor: '',
+  position: [0, 0, 0],
+  rotation: [0, 0, 0],
+  scale: 1,
+})
 export interface MountedProp extends Transform {
   id: string
   modelId: string
   name?: string
   file?: File
-  subset: 'whole' | 'weapon' | string // Raw mesh group name for individual Wiki props.
+  subset: 'whole' | 'weapon' | 'halo' | string // Also accepts a raw mesh group name for individual Wiki props.
   slotId: number | null
   bone: string
   visible: boolean

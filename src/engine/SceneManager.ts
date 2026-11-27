@@ -417,8 +417,12 @@ export class SceneManager {
     for (const [id, entry] of this.slots) {
       if (!entry.group.visible || !entry.actor) continue
       if (face) {
-        if (id === store.getState().activeId)
+        if (id === store.getState().activeId) {
           entry.actor.expandVisibleBounds(box, [...entry.actor.bodyMeshes, ...entry.actor.haloNodes])
+          entry.driver?.expandVisibleBounds(box, entry.driver.haloNodes)
+          const donor = this.props.haloDonor(id)
+          donor?.expandVisibleBounds(box, donor.haloNodes)
+        }
       } else {
         entry.actor.expandVisibleBounds(box)
         entry.driver?.expandVisibleBounds(box)
@@ -626,12 +630,15 @@ export class SceneManager {
     if (this.capturing || this.disposed) throw new Error('stageUnavailable')
     const s = store.getState()
     this.syncSlots()
+    // A donor can change between the last animation frame and the export click.
+    this.samplePose(s.timeline.time, 0, false, false)
     if (
       s.slots.some(
         (slot) =>
           store.getState().runtime[slot.id]?.status !== 'ready' ||
           !this.slots.get(slot.id)?.engine ||
-          (slot.weapon.source === 'donorC' && !this.props.donor(slot.id)),
+          (slot.weapon.source === 'donorC' && !this.props.donor(slot.id)) ||
+          (slot.halo.source === 'donorC' && !this.props.haloDonor(slot.id)),
       ) ||
       s.props.some((prop) => prop.visible && prop.status !== 'ready')
     )

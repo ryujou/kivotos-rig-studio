@@ -1,4 +1,4 @@
-// In a fresh studio dev tab at 360×800 or 390×844:
+// In a fresh studio dev tab at 390×580, 390×640, 390×844 or 360×640:
 // await (await import('./tests/browser-mobile-layout.mjs')).checkMobileLayout()
 export async function checkMobileLayout() {
   const one = selector => document.querySelector(selector)
@@ -6,7 +6,8 @@ export async function checkMobileLayout() {
   const tick = () => new Promise(resolve => setTimeout(resolve, 16))
   const box = el => el.getBoundingClientRect()
   const visible = el => box(el).width > 0
-  const check = (ok, message) => { if (!ok) throw Error(message + ' at ' + innerWidth + 'px') }
+  const check = (ok, message) => { if (!ok) throw Error(message + ' at ' + innerWidth + '×' + innerHeight) }
+  const checkOverflow = () => check(document.documentElement.scrollWidth === innerWidth, 'Page overflow')
   async function click(el) {
     el.click()
     await tick()
@@ -27,13 +28,35 @@ export async function checkMobileLayout() {
       last = r.right
     }
   }
+  function countFullCardRows() {
+    const grid = box(one('.card-scroll'))
+    const rows = new Map()
+    for (const card of all('.character-card')) {
+      const r = box(card)
+      if (r.top >= grid.bottom) break
+      if (r.top < grid.top || r.bottom > grid.bottom || r.left < grid.left || r.right > grid.right) continue
+      for (const selector of ['.card-identity strong', '.card-identity small']) {
+        const label = card.querySelector(selector)
+        check(label?.textContent.trim() && box(label).height > 0 && box(label).bottom <= r.bottom, 'Incomplete card label')
+      }
+      rows.set(r.top, (rows.get(r.top) || 0) + 1)
+    }
+    return [...rows.values()].filter(cards => cards === 2).length
+  }
 
   check(innerWidth <= 640, 'Use a phone viewport')
   check(!visible(one('.viewport-label')), 'Viewport label overlaps reopen controls')
   const topbar = one('.topbar')
+  if (innerWidth <= 520) {
+    const style = getComputedStyle(topbar)
+    const start = box(topbar).left + topbar.clientLeft + parseFloat(style.paddingLeft)
+    check(!visible(one('.topbar-brand')) && Math.abs(box(one('.slot-controls')).left - start) <= 1, 'Unused brand space')
+  }
   const controls = () => all('.brand img, .slot-controls button, .slot-controls select, .topbar-actions button, .mobile-lang-select select')
   const lang = one('.mobile-lang-select select')
   check(lang.options.length === 4 && !visible(one('.languages')), 'Language picker')
+  check(document.documentElement.lang === lang.value, 'Initial page language')
+  check(one('meta[name="google"]')?.content === 'notranslate', 'Translation hint')
   checkRow(topbar, controls())
   checkRow(topbar, controls().filter(el => el.tagName !== 'IMG'), 32)
   for (let slots = 2; slots <= 4; slots++) {
@@ -67,10 +90,41 @@ export async function checkMobileLayout() {
     }
   }
   await click(one('.reopen.left'))
-  const panel = one('.library-panel')
   check(visible(one('.drawer-scrim')) && !one('.inspector-panel'), 'Library/scrim state')
-  check(box(panel).width === Math.min(344, innerWidth - 16) && box(panel).bottom < box(one('.timeline')).top, 'Library bounds')
+  const timeline = one('.timeline')
+  function checkSheet() {
+    const panel = one('.panel'), scrim = one('.drawer-scrim')
+    const r = box(panel), dock = box(timeline)
+    check(r.width === Math.min(344, innerWidth - 16), 'Sheet width')
+    check(r.bottom <= innerHeight - 8 && Math.abs(r.bottom - dock.bottom) <= 1, 'Sheet bottom inset')
+    const z = el => Number(getComputedStyle(el).zIndex)
+    check(z(topbar) > z(panel) && z(panel) > z(scrim) && z(scrim) > z(timeline), 'Drawer stacking')
+    const y = dock.top + dock.height / 2
+    check(panel.contains(document.elementFromPoint(r.left + r.width / 2, y)), 'Timeline covers sheet')
+    check(panel.scrollWidth <= panel.clientWidth, 'Sheet overflow')
+    checkOverflow()
+  }
+  checkSheet()
+  check(!visible(one('.search-field kbd')), 'Mobile search shortcut hint')
   check(getComputedStyle(one('.search-field input')).fontSize === '16px', 'Search field zoom')
+  const picker = one('.clip-picker'), heading = one('.clip-heading')
+  check(heading.getAttribute('aria-expanded') === 'false' && !one('.clip-list') && !one('.clip-chips'), 'Clips initially expanded')
+  const fullRows = {}
+  for (const language of ['zh', 'ja', 'ko', 'en']) {
+    await select(lang, language)
+    await document.fonts.ready
+    fullRows[language] = countFullCardRows()
+    if (innerHeight >= 580) check(fullRows[language] >= 2, 'Fewer than two complete rows in ' + language)
+  }
+  await click(heading)
+  check(heading.getAttribute('aria-expanded') === 'true' && visible(one('.clip-list')), 'Clips failed to expand')
+  check(getComputedStyle(picker).maxHeight === '42%' && box(picker).height <= box(one('.character-pane')).height * 0.42 + 1, 'Expanded clip height')
+  await click(heading)
+  check(!one('.clip-list') && heading.getAttribute('aria-expanded') === 'false', 'Clips failed to collapse')
+  for (const card of all('.character-card').slice(0, 5)) await click(card)
+  check(all('.recent-picks button').length === 5, 'Recent picks missing')
+  if (innerHeight >= 580) check(countFullCardRows() >= 2, 'Recent picks crowd out the second row')
+  checkSheet()
   for (const side of ['right', 'left']) {
     const switcher = one('.reopen.' + side)
     check(!visible(switcher), 'Opposite reopen visible with drawer open')
@@ -80,6 +134,7 @@ export async function checkMobileLayout() {
     check(hit?.closest('.reopen') === switcher, 'Reopen covered after drawer dismissal')
     await click(switcher)
     check(all('.panel').length === 1, 'Overlapping drawers')
+    checkSheet()
   }
   await click(one('.export-button'))
   check(one('.inspector-panel') && !one('.library-panel'), 'Export drawer exclusivity')
@@ -101,6 +156,6 @@ export async function checkMobileLayout() {
       check(hit === handle, 'Slider obscured: ' + handle.dataset.thumb)
     }
   }
-  check(document.documentElement.scrollWidth === innerWidth, 'Page overflow')
-  return { width: innerWidth, height: innerHeight, guides }
+  checkOverflow()
+  return { width: innerWidth, height: innerHeight, fullRows, guides }
 }

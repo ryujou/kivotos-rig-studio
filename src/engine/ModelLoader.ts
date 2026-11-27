@@ -308,6 +308,10 @@ export class StudioModel {
     for (const mesh of this.weaponMeshes) this.setPartEnabled(mesh, enabled)
   }
 
+  setHalosEnabled(enabled: boolean) {
+    for (const node of this.haloNodes) if (node instanceof Mesh) this.setPartEnabled(node, enabled)
+  }
+
   syncSwitchVisibility(clip?: AnimationClip) {
     if (clip !== this.visibilityClip) {
       this.visibilityClip = clip

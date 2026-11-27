@@ -1,11 +1,13 @@
 import { Box3, Group, Matrix4, Mesh, Object3D, Quaternion, SkinnedMesh, Vector3 } from 'three'
 import { useStudioStore as store, type Slot, type StageSettings } from '../store/useStudioStore'
-import { rigBones, ModelLoader, type StudioModel } from './ModelLoader'
+import { decomposeRigTransform, rigBones, ModelLoader, type StudioModel } from './ModelLoader'
 import { ClipPlayer } from './RetargetEngine'
 import { canonicalBoneName } from './RigDefinition'
-import type { MountedProp, Transform } from './PropTypes'
+import type { HaloSettings, MountedProp, Transform } from './PropTypes'
 
 const rad = Math.PI / 180
+const donorKinds = ['weapon', 'halo'] as const
+type DonorKind = (typeof donorKinds)[number]
 export function applyTransform(object: Object3D, value: Transform) {
   object.position.fromArray(value.position)
   object.rotation.set(value.rotation[0] * rad, value.rotation[1] * rad, value.rotation[2] * rad)
@@ -26,6 +28,12 @@ export function styleModel(model: StudioModel, stage: StageSettings) {
 const bindings = new WeakMap<StudioModel, ReturnType<typeof indexModel>>()
 function indexModel(model: StudioModel) {
   const bones = new Map(rigBones(model).map((b) => [canonicalBoneName(b.name), b]))
+  const halos = new Set(model.haloNodes)
+  const haloRoots = [...halos].filter((node) => {
+    for (let parent = node.parent; parent; parent = parent.parent)
+      if (halos.has(parent)) return false
+    return true
+  })
   const grips = [...bones].filter(([key]) => /^bip001_weapon(?:_[rl])?$/.test(key)).map(([, node]) => node)
   if (!bones.has('bip001') && model.weaponMeshes.length && !grips.length) grips.push(model.root)
   if (!grips.length) {
@@ -51,7 +59,7 @@ function indexModel(model: StudioModel) {
     if (node.name && node.type === 'Object3D' && !sockets.has(canonicalBoneName(node.name)))
       sockets.set(canonicalBoneName(node.name), node)
   }
-  return { bones, grips, groups, sockets }
+  return { bones, grips, groups, sockets, haloRoots }
 }
 function binding(model: StudioModel) {
   let data = bindings.get(model)
@@ -63,9 +71,14 @@ function binding(model: StudioModel) {
 }
 export const attachmentNames = (model: StudioModel) => [...binding(model).sockets.values()].map((n) => n.name)
 export const propGroupNames = (model: StudioModel) => [...binding(model).groups.keys()]
+function subsetMeshes(model: StudioModel, subset: string) {
+  if (subset === 'halo') return model.haloNodes.filter((node) => node instanceof Mesh)
+  if (subset === 'weapon') return model.weaponMeshes
+  return binding(model).groups.get(subset)
+}
 function isolate(model: StudioModel, subset: string) {
   if (subset === 'whole') return
-  const keep = new Set(subset === 'weapon' ? model.weaponMeshes : binding(model).groups.get(subset))
+  const keep = new Set(subsetMeshes(model, subset))
   if (!keep.size) throw new Error('missing_mesh_group')
   for (const mesh of model.meshGroups.keys()) model.setPartEnabled(mesh, keep.has(mesh))
 }
@@ -82,6 +95,14 @@ export class SlotProps {
   private offset = new Matrix4()
   private target = new Matrix4()
   private transform = new Object3D()
+  private readonly stageWorld = new Matrix4()
+  private readonly stageInv = new Matrix4()
+  private readonly actorFrame = new Matrix4()
+  private readonly sourceFrame = new Matrix4()
+  private readonly position = new Vector3()
+  private readonly rotation = new Quaternion()
+  private readonly restInverse = new Quaternion()
+  private readonly scale = new Vector3()
   constructor(
     readonly actor: StudioModel,
     readonly motion: StudioModel,
@@ -96,18 +117,23 @@ export class SlotProps {
     }
     this.editedGrips.length = 0
   }
-  apply(slot: Slot, donor?: StudioModel) {
-    const w = slot.weapon
+  apply(slot: Slot, donor?: StudioModel, haloDonor?: StudioModel) {
     for (const [name, meshes] of binding(this.motion).groups)
       for (const mesh of meshes) this.motion.setPartEnabled(mesh, slot.embedded[name] !== false)
-    const model =
-      w.source === 'actorA'
-        ? this.actor
-        : w.source === 'motionB'
-          ? this.motion
-          : w.source === 'donorC'
-            ? donor
-            : undefined
+    this.applyWeapon(slot, donor)
+    this.applyHalo(slot, haloDonor)
+  }
+  private sourceModel(source: HaloSettings['source'], donor?: StudioModel) {
+    switch (source) {
+      case 'actorA': return this.actor
+      case 'motionB': return this.motion
+      case 'donorC': return donor
+      case 'hidden': return undefined
+    }
+  }
+  private applyWeapon(slot: Slot, donor?: StudioModel) {
+    const w = slot.weapon
+    const model = this.sourceModel(w.source, donor)
     const enabled = w.source !== 'actorA' || slot.rig.showActorWeapon
     this.actor.setWeaponsEnabled(this.actor === model && enabled)
     if (this.motion !== this.actor) this.motion.setWeaponsEnabled(this.motion === model && enabled)
@@ -146,22 +172,82 @@ export class SlotProps {
       this.offset.elements[12] = w.position[0] / (Math.abs(bindScale?.x ?? 1) || 1)
       this.offset.elements[13] = w.position[1] / (Math.abs(bindScale?.y ?? 1) || 1)
       this.offset.elements[14] = w.position[2] / (Math.abs(bindScale?.z ?? 1) || 1)
-      grip.updateMatrix()
-      let saved = this.originals.get(grip)
+      this.scratch.copy(grip.parent.matrixWorld).invert().multiply(this.target).multiply(this.offset)
+      this.place(grip, this.scratch)
+    }
+  }
+  private place(node: Object3D, local: Matrix4) {
+    if (!this.editedGrips.includes(node)) {
+      let saved = this.originals.get(node)
       if (!saved) {
         saved = { position: new Vector3(), rotation: new Quaternion(), scale: new Vector3() }
-        this.originals.set(grip, saved)
+        this.originals.set(node, saved)
       }
-      saved.position.copy(grip.position)
-      saved.rotation.copy(grip.quaternion)
-      saved.scale.copy(grip.scale)
-      this.editedGrips.push(grip)
-      this.scratch.copy(grip.parent.matrixWorld).invert().multiply(this.target).multiply(this.offset)
-      if (this.scratch.determinant() === 0) {
-        grip.position.setFromMatrixPosition(this.scratch)
-        grip.scale.setScalar(0)
-      } else this.scratch.decompose(grip.position, grip.quaternion, grip.scale)
-      grip.updateWorldMatrix(false, true)
+      saved.position.copy(node.position)
+      saved.rotation.copy(node.quaternion)
+      saved.scale.copy(node.scale)
+      this.editedGrips.push(node)
+    }
+    if (local.determinant() === 0) {
+      node.position.setFromMatrixPosition(local)
+      node.scale.setScalar(0)
+    } else local.decompose(node.position, node.quaternion, node.scale)
+    node.updateWorldMatrix(false, true)
+  }
+  private uprightHeadFrame(model: StudioModel, out: Matrix4) {
+    const head = binding(model).bones.get('bip001_head')
+    if (!head) return false
+    head.updateWorldMatrix(true, false)
+    this.scratch.multiplyMatrices(this.stageInv, head.matrixWorld)
+    const valid = decomposeRigTransform(this.scratch, this.position, this.rotation, this.scale)
+    const rest = model.rest.get(head)!.restWorldQuat
+    if (valid) this.rotation.normalize()
+    else this.rotation.copy(rest)
+    this.rotation.multiply(this.restInverse.copy(rest).normalize().invert()).normalize()
+    out.compose(this.position, this.rotation, this.scale.setScalar(1))
+    return true
+  }
+  private applyHalo(slot: Slot, donor?: StudioModel) {
+    const h = slot.halo
+    const model = this.sourceModel(h.source, donor)
+    const sameModel = model === this.actor
+    this.actor.setHalosEnabled(sameModel)
+    if (this.motion !== this.actor) this.motion.setHalosEnabled(this.motion === model)
+    donor?.setHalosEnabled(donor === model)
+    if (!model) return
+    const hasOffset = h.scale !== 1 || h.position.some(Boolean) || h.rotation.some(Boolean)
+    if (sameModel && !hasOffset) return
+
+    const stage = this.actor.root.parent
+    if (stage) {
+      stage.updateWorldMatrix(true, false)
+      this.stageWorld.copy(stage.matrixWorld)
+    } else this.stageWorld.identity()
+    this.stageInv.copy(this.stageWorld).invert()
+    if (!this.uprightHeadFrame(this.actor, this.actorFrame)) return
+    if (sameModel) this.sourceFrame.copy(this.actorFrame)
+    else if (!this.uprightHeadFrame(model, this.sourceFrame)) {
+      // A standalone halo's origin sits above and behind the head in the upright bind frame.
+      this.sourceFrame.makeTranslation(0, -0.365, 0.209)
+    }
+    this.sourceFrame.invert().multiply(this.stageInv)
+    this.actorFrame.premultiply(this.stageWorld)
+    this.transform.rotation.set(h.rotation[0] * rad, h.rotation[1] * rad, h.rotation[2] * rad)
+    this.transform.scale.setScalar(h.scale)
+    for (const root of binding(model).haloRoots) {
+      if (!root.parent) continue
+      root.updateWorldMatrix(true, false)
+      this.target.multiplyMatrices(this.sourceFrame, root.matrixWorld)
+      // Take translation out before rotating/scaling so the halo turns about its own center.
+      this.transform.position.setFromMatrixPosition(this.target)
+      this.transform.position.add(this.position.fromArray(h.position))
+      this.transform.updateMatrix()
+      this.target.setPosition(0, 0, 0)
+      this.scratch.copy(root.parent.matrixWorld).invert()
+        .multiply(this.actorFrame)
+        .multiply(this.transform.matrix)
+        .multiply(this.target)
+      this.place(root, this.scratch)
     }
   }
 }
@@ -196,6 +282,9 @@ export class PropManager {
   donor(id: number) {
     return this.items.get('donor:' + id)?.model
   }
+  haloDonor(id: number) {
+    return this.items.get('halo-donor:' + id)?.model
+  }
   private drop(id: string) {
     const item = this.items.get(id)
     if (!item) return
@@ -205,7 +294,13 @@ export class PropManager {
     item.anchor.removeFromParent()
     this.items.delete(id)
   }
-  private ensure(id: string, source: string | File, subset: string, donorSlot?: number) {
+  private ensure(
+    id: string,
+    source: string | File,
+    subset: string,
+    donorSlot?: number,
+    donorKind: DonorKind = 'weapon',
+  ) {
     let item = this.items.get(id)
     if (item?.source === source && item.subset === subset) return item
     this.drop(id)
@@ -225,6 +320,7 @@ export class PropManager {
     this.scene.add(item.anchor)
     this.items.set(id, item)
     const current = item
+    const donorId = store.getState().slots.find((slot) => slot.id === donorSlot)?.[donorKind].donor
     void this.loader
       .load(source, undefined, item.controller.signal)
       .then((model) => {
@@ -236,11 +332,12 @@ export class PropManager {
         if (
           donorSlot !== undefined &&
           typeof source !== 'string' &&
-          !model.weaponMeshes.length &&
+          !(donorKind === 'halo' ? model.haloNodes : model.weaponMeshes).length &&
           !rigBones(model).some((b) => canonicalBoneName(b.name) === 'bip001')
         ) {
-          // A standalone local weapon uses its authored origin as the grip.
-          model.weaponMeshes.push(...model.meshGroups.keys())
+          // A standalone local prop uses its authored origin for attachment.
+          if (donorKind === 'halo') model.haloNodes.push(model.root, ...model.meshGroups.keys())
+          else model.weaponMeshes.push(...model.meshGroups.keys())
         }
         isolate(model, subset)
         current.player = new ClipPlayer(model.root)
@@ -256,7 +353,7 @@ export class PropManager {
           const rest = model.rest.get(grip)!
           current.pivot.compose(rest.restWorldPos, rest.restWorldQuat, new Vector3(1, 1, 1)).invert()
         } else if (subset !== 'whole') {
-          const meshes = binding(model).groups.get(subset)!
+          const meshes = subsetMeshes(model, subset)!
           const center = new Vector3()
           for (const mesh of meshes) {
             mesh.geometry.computeBoundingBox()
@@ -283,7 +380,12 @@ export class PropManager {
         current.model?.dispose()
         current.model = undefined
         const s = store.getState()
-        if (donorSlot !== undefined) s.updateRuntime(donorSlot, { donorError: true })
+        if (donorSlot !== undefined) {
+          const selected = s.slots.find((slot) => slot.id === donorSlot)?.[donorKind]
+          if (selected?.source === 'donorC' && selected.donor === donorId)
+            s.updateRuntime(donorSlot, donorKind === 'halo' ? { haloDonorError: true } : { donorError: true })
+          return
+        }
         const prop = s.props.find((p) => p.id === id)
         if (prop) s.upsertProp({ ...prop, status: 'error' })
       })
@@ -298,31 +400,36 @@ export class PropManager {
     const retained = this.retained
     retained.clear()
     for (const slot of s.slots) {
-      const source = slot.weapon.source === 'donorC' && resolve(slot.weapon.donor)
-      if (!source) continue
-      const id = 'donor:' + slot.id
-      const item = this.ensure(id, source, 'weapon', slot.id)
-      retained.add(id)
-      const group = slots.get(slot.id)?.group
-      item.anchor.visible = !!group && !!slots.get(slot.id)?.actor
-      if (group) {
-        group.updateWorldMatrix(true, false)
-        item.anchor.matrix.copy(group.matrixWorld)
-      }
-      item.anchor.updateMatrixWorld(true)
-      if (item.model) {
-        const clip =
-          item.model.animations.find((c) => c.name === slot.clip) ??
-          (!binding(item.model).bones.has('bip001') ? item.model.animations[0] : undefined)
+      const entry = slots.get(slot.id)
+      for (const kind of donorKinds) {
+        const settings = slot[kind]
+        const source = settings.source === 'donorC' && resolve(settings.donor)
+        if (!source) continue
+        const id = (kind === 'halo' ? 'halo-donor:' : 'donor:') + slot.id
+        const item = this.ensure(id, source, kind, slot.id, kind)
+        retained.add(id)
+        item.anchor.visible = !!entry?.group && !!entry.actor
+        if (entry?.group) {
+          entry.group.updateWorldMatrix(true, false)
+          item.anchor.matrix.copy(entry.group.matrixWorld)
+        }
+        item.anchor.updateMatrixWorld(true)
+        if (!item.model) continue
+        const { animations } = item.model
+        let clip = animations.find((c) => c.name === slot.clip)
+        if (!clip && kind === 'halo')
+          clip = animations.find((c) => /^(?:Normal|Stand|Cafe)_Idle$/i.test(c.name)) ?? animations[0]
+        else if (!clip && !binding(item.model).bones.has('bip001')) clip = animations[0]
         const at =
           clip?.duration && time > clip.duration && s.timeline.loop
             ? time % clip.duration
             : Math.min(time, clip?.duration ?? 0)
         item.player?.sample(clip, at)
-        item.model?.syncSwitchVisibility(clip)
+        item.model.syncSwitchVisibility(clip)
       }
     }
-    for (const slot of s.slots) slots.get(slot.id)?.props?.apply(slot, this.donor(slot.id))
+    for (const slot of s.slots)
+      slots.get(slot.id)?.props?.apply(slot, this.donor(slot.id), this.haloDonor(slot.id))
     for (const prop of s.props) {
       const source = prop.file ?? resolve(prop.modelId)
       if (!source) continue

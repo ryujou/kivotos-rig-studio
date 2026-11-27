@@ -223,13 +223,15 @@ export function makeHumanoidModel({
 }
 
 // Minimal animated triangle with inline binary data, built entirely in memory.
-export function animatedGlb(names = ['Cafe_Reaction']) {
+export function animatedGlb(names = ['Cafe_Reaction'], {
+  nodes = [{ name: 'Bip001', children: [1, 2] }, { name: 'Body', mesh: 0 }, { name: 'St_point' }],
+} = {}) {
   const payload = new Float32Array([-0.5, 0, 0, 0.5, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0.2, 0, 0])
   const json = makeGlbBytes({
     asset: { version: '2.0' },
     scene: 0,
     scenes: [{ nodes: [0] }],
-    nodes: [{ name: 'Bip001', children: [1, 2] }, { name: 'Body', mesh: 0 }, { name: 'St_point' }],
+    nodes,
     meshes: [{ name: 'CH0001_Body', primitives: [{ attributes: { POSITION: 0 } }] }],
     buffers: [{ byteLength: payload.byteLength }],
     bufferViews: [

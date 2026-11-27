@@ -2285,7 +2285,7 @@ input[type='color']::-webkit-color-swatch {
   .slot-controls {
     max-width: 100%;
   }
-  .wiki-badge span {
+  .wiki-badge span, .search-field kbd {
     display: none;
   }
 }
@@ -2294,6 +2294,7 @@ input[type='color']::-webkit-color-swatch {
     --drawer-width: min(344px, calc(100vw - var(--edge-l) - var(--edge-r)));
   }
   .topbar {
+    z-index: 8;
     top: var(--edge-t);
     left: var(--edge-l);
     right: var(--edge-r);
@@ -2321,11 +2322,26 @@ input[type='color']::-webkit-color-swatch {
     font-weight: 700;
   }
   .slot-pill { gap: 3px; }
+  .drawer-scrim { z-index: 6; }
   .panel {
+    z-index: 7;
     top: calc(var(--edge-t) + 54px);
-    bottom: calc(var(--edge-b) + 86px);
+    bottom: var(--edge-b);
     width: var(--drawer-width);
   }
+  .panel-header { padding: 6px 10px; }
+  .panel-icon { width: 24px; height: 24px; }
+  .panel-header h2 { font-size: 14px; }
+  .panel-tabs button { padding: 6px 2px; }
+  .browser-controls { padding: 6px 10px 4px; gap: 5px; }
+  .target-switch button { padding: 5px 8px; }
+  .search-field { padding: 2px 6px; min-height: 34px; }
+  .search-field input { height: 28px; }
+  .school-select .select-box { height: 32px; }
+  .card-art { height: 76px; }
+  .cards { gap: 6px; }
+  .card-identity { padding: 4px 6px 6px; }
+  .clip-picker.open { max-height: 42%; }
   .library-panel, .reopen.left { left: var(--edge-l); }
   .inspector-panel, .reopen.right { right: var(--edge-r); }
   .reopen { top: calc(var(--edge-t) + 54px); width: 38px; height: 38px; }
@@ -2351,7 +2367,18 @@ input[type='color']::-webkit-color-swatch {
   .playhead { width: 15px; height: 15px; transform: none; margin: -7.5px 0 0 -7.5px; z-index: auto; }
   .trim-handle::before, .playhead::before { content: ''; position: absolute; inset: -10px; z-index: -1; }
 }
+@media (max-width: 640px) and (max-height: 640px) {
+  /* Keep the card grid steady after a pick by sharing the school filter's row. */
+  .browser-controls:has(.recent-picks) {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-auto-flow: row dense;
+  }
+  .browser-controls > :not(.school-select, .recent-picks) { grid-column: 1 / -1; }
+}
 @media (max-width: 520px) {
+  .topbar-brand { display: none; }
+  .topbar { grid-template-columns: minmax(0, 1fr) auto; }
+  .slot-controls { justify-self: start; }
   .chain-pill span { display: none; }
   .chain-pill { min-width: 32px; }
 }

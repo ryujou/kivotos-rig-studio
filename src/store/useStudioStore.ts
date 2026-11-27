@@ -2,8 +2,10 @@ import { create } from 'zustand'
 import { snapshotModels, type CatalogModel } from '../services/wikiCatalog'
 import { languages, translate, type Language, type MessageKey } from '../i18n'
 import {
+  defaultHalo,
   defaultWeapon,
   identityTransform,
+  type HaloSettings,
   type MountedProp,
   type Transform,
   type WeaponSettings,
@@ -49,6 +51,7 @@ export interface Slot extends Transform {
   endClip?: string
   embedded: Record<string, boolean>
   weapon: WeaponSettings
+  halo: HaloSettings
   rig: RigSettings
   externalClips: AnimationClip[]
 }
@@ -74,6 +77,7 @@ export interface SlotRuntime {
   actorClips: ClipInfo[]
   attachmentNames: string[]
   donorError?: boolean
+  haloDonorError?: boolean
   propGroups: string[]
   manualOnlyTargets?: ReadonlySet<string>
   targetNames: string[]
@@ -111,6 +115,7 @@ function createSlot(id: number, actor: string = defaultModel): Slot {
     ...identityTransform(),
     embedded: {},
     weapon: defaultWeapon(),
+    halo: defaultHalo(),
     yaw: 0,
     rig: defaultRig(),
     externalClips: [],
@@ -339,7 +344,15 @@ export const useStudioStore = create<StudioState>((set, get) => {
     },
     selectProp: (id) => set({ selectedProp: id }),
     updateSlot: (id, patch) =>
-      set((s) => ({ slots: s.slots.map((slot) => (slot.id === id ? { ...slot, ...patch } : slot)) })),
+      set((s) => {
+        const runtime = s.runtime[id]
+        return {
+          slots: s.slots.map((slot) => (slot.id === id ? { ...slot, ...patch } : slot)),
+          ...(patch.halo && runtime?.haloDonorError
+            ? { runtime: { ...s.runtime, [id]: { ...runtime, haloDonorError: false } } }
+            : {}),
+        }
+      }),
     castActor(id, actor) {
       const slot = get().slots.find((k) => k.id === id)
       if (!slot || slot.actor === actor) return

@@ -7,6 +7,27 @@ import { jointCombos } from '../src/data/jointCombos.ts'
 test.beforeEach(() => useStudioStore.setState(useStudioStore.getInitialState(), true))
 const findSlot = (slots, id) => slots.find((slot) => slot.id === id)
 
+test('slots own their halo defaults and halo edits clear only that slot’s halo error', () => {
+  const s = useStudioStore.getState()
+  s.addSlot()
+  const [a, b] = useStudioStore.getState().slots
+  assert.deepEqual(a.halo, { source: 'actorA', donor: '', position: [0, 0, 0], rotation: [0, 0, 0], scale: 1 })
+  assert.deepEqual(a.halo, b.halo)
+  assert.notEqual(a.halo.position, b.halo.position)
+  assert.notEqual(a.halo.rotation, b.halo.rotation)
+  for (const slot of [a, b]) s.updateRuntime(slot.id, { haloDonorError: true, donorError: true })
+  s.updateSlot(a.id, { halo: { ...a.halo, source: 'donorC', donor: 'Aru' } })
+  const { slots, runtime } = useStudioStore.getState()
+  assert.equal(slots[0].halo.source, 'donorC')
+  assert.equal(slots[1].halo.source, 'actorA')
+  assert.equal(runtime[a.id].haloDonorError, false)
+  assert.equal(runtime[a.id].donorError, true)
+  assert.equal(runtime[b.id].haloDonorError, true)
+  s.updateRuntime(a.id, { haloDonorError: true })
+  s.updateSlot(a.id, { halo: { ...slots[0].halo, donor: 'Hina' } })
+  assert.equal(useStudioStore.getState().runtime[a.id].haloDonorError, false)
+})
+
 test('detectBrowserLanguage maps the primary locale to a supported language', () => {
   const locales = {
     zh: ['zh-CN', 'zh-TW', 'zh_HK', 'cmn-Hans-CN', 'YUE_Hant_HK', 'wuu'],

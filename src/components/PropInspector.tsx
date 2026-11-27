@@ -1,6 +1,7 @@
+import type { ReactNode } from 'react'
 import { meshLabel } from '../i18n/meshLabels'
 import { Box, Crosshair, Layers3, RotateCcw, Trash2 } from 'lucide-react'
-import { identityTransform, type MountedProp, type WeaponSettings } from '../engine/PropTypes'
+import { identityTransform, type HaloSettings, type MountedProp, type WeaponSettings } from '../engine/PropTypes'
 import { useActiveSlot, useStudioStore, useText } from '../store/useStudioStore'
 import { AxisSliders, BoneSelect, ModelSelect } from './InteractionControls'
 import { Toggle, IconButton, SelectBox, useModelLabel } from './shared'
@@ -100,6 +101,101 @@ function MountedList() {
     </section>
   )
 }
+function SourceControls({
+  title, offsetLabel, value, defaultDonor, change, error, children,
+}: {
+  title: string
+  offsetLabel: string
+  value: HaloSettings
+  defaultDonor: string
+  change: (change: Partial<HaloSettings>) => void
+  error?: string
+  children?: ReactNode
+}) {
+  const t = useText()
+  const registerFile = useStudioStore((s) => s.registerFile)
+  return (
+    <section className="control-section">
+      <h3 className="work-heading">{title}</h3>
+      <div className="weapon-options">
+        {(
+          [
+            ['actorA', 'actor'],
+            ['motionB', 'motion'],
+            ['donorC', 'donor'],
+            ['hidden', 'hide'],
+          ] as const
+        ).map(([source, key]) => (
+          <button
+            key={source}
+            aria-pressed={value.source === source}
+            onClick={() => change({ source, donor: value.donor || defaultDonor })}
+          >
+            {t(key)}
+          </button>
+        ))}
+      </div>
+      {value.source === 'donorC' && (
+        <>
+          <label className="field-label">{t('donorModel')}</label>
+          <ModelSelect label={t('donorModel')} value={value.donor} onChange={(donor) => change({ donor })} />
+          <label className="local-donor">
+            {t('openGlb')}
+            <input
+              type="file"
+              accept=".glb"
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                if (file) change({ donor: registerFile(file) })
+                e.target.value = ''
+              }}
+            />
+          </label>
+          {error && <small role="alert">{error}</small>}
+        </>
+      )}
+      {value.source !== 'hidden' && (
+        <details className="disclosure grip-offset">
+          <summary>{offsetLabel}</summary>
+          {children}
+          <AxisSliders
+            label={t('rootOffset')}
+            value={value.position}
+            onChange={(position) => change({ position })}
+            limit={1}
+            step={0.005}
+          />
+          <AxisSliders
+            label={t('rotationOffset')}
+            value={value.rotation}
+            onChange={(rotation) => change({ rotation })}
+            limit={180}
+            step={1}
+          />
+          <label className="slider-row">
+            <span>{t('scale')}</span>
+            <input
+              type="range"
+              min=".01"
+              max="4"
+              step=".01"
+              value={value.scale}
+              onChange={(e) => change({ scale: +e.target.value })}
+            />
+            <code>{value.scale.toFixed(2)}×</code>
+          </label>
+          <button
+            className="quiet-button"
+            onClick={() => change({ position: [0, 0, 0], rotation: [0, 0, 0], scale: 1 })}
+          >
+            {t('zeroOffset')}
+          </button>
+        </details>
+      )}
+    </section>
+  )
+}
+
 export function WeaponControls() {
   const t = useText(),
     slot = useActiveSlot(),
@@ -136,97 +232,49 @@ export function WeaponControls() {
           ))}
         </section>
       )}
-      <section className="control-section">
-        <h3 className="work-heading">{t('weaponSource')}</h3>
-        <div className="weapon-options">
-          {(
-            [
-              ['actorA', 'actor'],
-              ['motionB', 'motion'],
-              ['donorC', 'donor'],
-              ['hidden', 'hide'],
-            ] as const
-          ).map(([source, key]) => (
-            <button
-              key={source}
-              aria-pressed={w.source === source}
-              onClick={() => weapon({ source, donor: w.donor || slot.motion })}
-            >
-              {t(key)}
-            </button>
-          ))}
-        </div>
-        {w.source === 'donorC' && (
-          <>
-            <label className="field-label">{t('donorModel')}</label>
-            <ModelSelect label={t('donorModel')} value={w.donor} onChange={(donor) => weapon({ donor })} />
-            <label className="local-donor">
-              {t('openGlb')}
-              <input
-                type="file"
-                accept=".glb"
-                onChange={(e) => {
-                  const file = e.target.files?.[0]
-                  if (file) weapon({ donor: s.registerFile(file) })
-                  e.target.value = ''
-                }}
-              />
-            </label>
-            {runtime?.donorError && <small role="alert">{t('propFailed')}</small>}
-          </>
-        )}
-        {w.source !== 'hidden' && (
-          <details className="disclosure grip-offset">
-            <summary>{t('gripOffset')}</summary>
-            <label className="select-row">
-              {t('attachMode')}
-              <SelectBox
-                value={w.attach}
-                displayLabel={t(w.attach === 'weaponTrack' ? 'followWeapon' : 'snapHand')}
-                onChange={(e) => weapon({ attach: e.target.value as WeaponSettings['attach'] })}
-              >
-                <option value="weaponTrack">{t('followWeapon')}</option>
-                <option value="rightHand">{t('snapHand')}</option>
-              </SelectBox>
-            </label>
-            <AxisSliders
-              label={t('rootOffset')}
-              value={w.position}
-              onChange={(position) => weapon({ position })}
-              limit={1}
-              step={0.005}
-            />
-            <AxisSliders
-              label={t('rotationOffset')}
-              value={w.rotation}
-              onChange={(rotation) => weapon({ rotation })}
-              limit={180}
-              step={1}
-            />
-            <label className="slider-row">
-              <span>{t('scale')}</span>
-              <input
-                type="range"
-                min=".01"
-                max="4"
-                step=".01"
-                value={w.scale}
-                onChange={(e) => weapon({ scale: +e.target.value })}
-              />
-              <code>{w.scale.toFixed(2)}×</code>
-            </label>
-            <button
-              className="quiet-button"
-              onClick={() => weapon({ position: [0, 0, 0], rotation: [0, 0, 0], scale: 1 })}
-            >
-              {t('zeroOffset')}
-            </button>
-          </details>
-        )}
-      </section>
+      <SourceControls
+        title={t('weaponSource')}
+        offsetLabel={t('gripOffset')}
+        value={w}
+        defaultDonor={slot.motion}
+        change={weapon}
+        error={runtime?.donorError ? t('propFailed') : undefined}
+      >
+        <label className="select-row">
+          {t('attachMode')}
+          <SelectBox
+            value={w.attach}
+            displayLabel={t(w.attach === 'weaponTrack' ? 'followWeapon' : 'snapHand')}
+            onChange={(e) => weapon({ attach: e.target.value as WeaponSettings['attach'] })}
+          >
+            <option value="weaponTrack">{t('followWeapon')}</option>
+            <option value="rightHand">{t('snapHand')}</option>
+          </SelectBox>
+        </label>
+      </SourceControls>
     </>
   )
 }
+export function HaloControls() {
+  const t = useText()
+  const slot = useActiveSlot()
+  const failed = useStudioStore((s) => s.runtime[slot.id]?.haloDonorError)
+  const updateSlot = useStudioStore((s) => s.updateSlot)
+  return (
+    <SourceControls
+      title={t('haloSource')}
+      offsetLabel={t('haloOffset')}
+      value={slot.halo}
+      defaultDonor={slot.motion}
+      change={(patch) => {
+        if (failed) useStudioStore.getState().updateRuntime(slot.id, { haloDonorError: false })
+        updateSlot(slot.id, { halo: { ...slot.halo, ...patch } })
+      }}
+      error={failed ? t('haloFailed') : undefined}
+    />
+  )
+}
+
 export function SceneOutliner() {
   const t = useText(),
     label = useModelLabel(),

@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { GuideDialog, toggleGuideShortcut } from '../src/components/GuideModal.tsx'
+import { HaloControls } from '../src/components/PropInspector.tsx'
 import { CropOverlay } from '../src/components/CropOverlay.tsx'
 import { useStudioStore as store } from '../src/store/useStudioStore.ts'
 import { languages, translate } from '../src/i18n/index.ts'
@@ -74,6 +75,28 @@ test('all localized guide steps render their image, shortcuts, arrows and final 
       const footer = html.slice(html.indexOf('<footer'))
       assert.ok(footer.includes(translate(lang, index === 3 ? 'guideDone' : 'guideNext')))
       assert.equal(footer.includes('lucide-chevron-right'), index < 3)
+    }
+  }
+})
+
+test('halo controls render localized modes, donor errors and collapsed fine tuning in every language', (t) => {
+  const snapshot = store.getInitialState()
+  const { slots, language, runtime } = snapshot
+  t.after(() => Object.assign(snapshot, { slots, language, runtime }))
+  snapshot.runtime = { 1: { haloDonorError: true } }
+  for (const lang of languages) {
+    snapshot.language = lang
+    for (const source of ['actorA', 'motionB', 'donorC', 'hidden']) {
+      snapshot.slots = [{ ...slots[0], halo: { ...slots[0].halo, source } }]
+      const html = renderToStaticMarkup(createElement(HaloControls))
+      assert.ok(html.includes(translate(lang, 'haloSource')))
+      assert.equal((html.match(/aria-pressed=/g) ?? []).length, 4)
+      assert.equal((html.match(/aria-pressed="true"/g) ?? []).length, 1)
+      assert.equal(html.includes('role="alert"'), source === 'donorC')
+      assert.equal(html.includes(translate(lang, 'haloFailed')), source === 'donorC')
+      assert.equal(html.includes('accept=".glb"'), source === 'donorC')
+      assert.equal(html.includes('<details class="disclosure grip-offset">'), source !== 'hidden')
+      assert.equal((html.match(/type="range"/g) ?? []).length, source === 'hidden' ? 0 : 7)
     }
   }
 })

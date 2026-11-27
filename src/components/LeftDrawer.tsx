@@ -74,8 +74,10 @@ function ClipPicker() {
     slot = useActiveSlot(),
     runtime = useStudioStore((s) => s.runtime[s.activeId]),
     setClip = useStudioStore((s) => s.setClip)
-  const [open, setOpen] = useState(true),
-    [filter, setFilter] = useState<'all' | ClipCategory>('all')
+  const [open, setOpen] = useState(
+    () => typeof window === 'undefined' || (window.innerWidth > 640 && window.innerHeight >= 700),
+  )
+  const [filter, setFilter] = useState<'all' | ClipCategory>('all')
   const chain = useStudioStore((s) => s.timeline.chainStartEnd)
   const [importing, setImporting] = useState(false)
   const file = useRef<HTMLInputElement>(null)
