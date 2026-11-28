@@ -1,7 +1,7 @@
 import { Object3D, Vector3 } from 'three'
 import type { BodyColliders, ClothMaterial } from './BodyColliders'
 import type { RestTransform } from './ModelLoader'
-import { canonicalBoneName, classifyBone } from './RigDefinition'
+import { bodyTailKey, canonicalBoneName, classifyBone, kimonoHemKey, sleevePanelKey } from './RigDefinition'
 import { isRigidAccessory, torsoAccessoryAnchor } from './TorsoAccessories'
 
 const decorative =
@@ -11,12 +11,39 @@ const hubName =
 const skirtHub = /^bip001_(?:pelvis|spine\d*)$/
 const hair = /hair|ponytail|twin|braid|ahoge|earring/i
 
+// Some rigs put the sleeve on a numbered twist helper alongside the wrist.
+// Resolve that helper only inside the matching anatomical forearm.
+export function sleeveForearm(hub: Object3D) {
+  const key = canonicalBoneName(hub.name)
+  if (/^bip001_[lr]_forearm$/.test(key)) return hub
+  const twist = /^(?:bone|bip001(?:_b)?)_([lr])_forearm_(?:tw|twist)_?\d*$/.exec(key)
+  if (twist && hub.parent && canonicalBoneName(hub.parent.name) === `bip001_${twist[1]}_forearm`)
+    return hub.parent
+}
+
+export function sleeveSide(node: Object3D) {
+  for (let n: Object3D | null = node.parent; n; n = n.parent) {
+    const side = /^bip001_([lr])_(?:clavicle|upperarm|forearm|hand)$/.exec(canonicalBoneName(n.name))
+    if (side) return side[1]
+  }
+}
+
+// Several rigs put the working skirt panels beside the pelvis or even beside
+// the entire biped. Only adopt clothing under this character's own root.
+export function rootGarment(node: Object3D, pelvis: Object3D) {
+  const parent = node.parent
+  return !!parent && (parent === pelvis.parent || parent === pelvis.parent?.parent) &&
+    /^(?:bone_)?(?:skirt|dress|coat)/.test(canonicalBoneName(node.name))
+}
+
 function material(name: string, hub: string, bindDy: number): ClothMaterial {
+  if (hub === 'bip001_pelvis' && bodyTailKey.test(canonicalBoneName(name))) return 'tail'
+  if (hub === 'bip001_head' && hair.test(name)) return 'hair'
   if (/earring|ponytail/i.test(name)) return 'hair'
   if (/wing|ear|tail/i.test(name)) return 'wing'
   if (
     skirtHub.test(hub) &&
-    /skirt|dress|apron|coat|jacket/i.test(name) &&
+    (/skirt|dress|apron|coat|jacket/i.test(name) || kimonoHemKey.test(canonicalBoneName(name))) &&
     (hub === 'bip001_pelvis' || bindDy <= 0.008)
   )
     return 'skirt'
@@ -78,14 +105,23 @@ export function discoverCloth(
     const tip = new Vector3()
     for (const child of children) tip.add(rest.get(child)!.restLocalPos)
     if (children.length) tip.divideScalar(children.length)
-    const skinTip = !children.length && skin?.leafTips.get(bone)
+    const skinTip = !children.length && (skin?.hangingSleeveTips.get(bone) ?? skin?.leafTips.get(bone))
     if (skinTip) tip.copy(skinTip)
-    if (tip.lengthSq() < 1e-12 && Math.min(...bind.restLocalScale.toArray().map(Math.abs)) > 1e-8) {
+    if (tip.lengthSq() < 1e-12 && pelvis && rootGarment(bone, pelvis)) {
+      // Independent hem pivots have no incoming waist-to-panel link. Use
+      // their weighted surface, never the offset from the model origin.
+      const probes = skin?.skinProbes.get(bone) ?? []
+      let drop = 0
+      for (const probe of probes) {
+        const y = probe.clone().multiply(bind.restWorldScale).applyQuaternion(bind.restWorldQuat).y
+        if (y < drop) { tip.copy(probe); drop = y }
+      }
+    } else if (tip.lengthSq() < 1e-12 && Math.min(...bind.restLocalScale.toArray().map(Math.abs)) > 1e-8) {
       tip
         .copy(bind.restLocalPos)
         .applyQuaternion(bind.restLocalQuat.clone().invert())
         .divide(bind.restLocalScale)
-        .multiplyScalar(0.65)
+        .multiplyScalar(kimonoHemKey.test(canonicalBoneName(bone.name)) ? 0.12 : 0.65)
     }
     const restTip = tip
       .clone()
@@ -114,9 +150,15 @@ export function discoverCloth(
     return deepest
   }
 
+  if (pelvis && skin?.hasSkin) {
+    for (const panel of bones) {
+      if (rootGarment(panel, pelvis) && eligible(panel)) visit(panel, panel, pelvis, 'skirt', 0, false)
+    }
+  }
   for (const hub of bones) {
     const key = canonicalBoneName(hub.name)
-    if (!hubName.test(key)) continue
+    const bodyHub = hubName.test(key) || !!sleeveForearm(hub)
+    if (!bodyHub && !hub.children.some(child => sleevePanelKey.test(canonicalBoneName(child.name)) && sleeveSide(child))) continue
     let blocked = false
     for (let ancestor = hub.parent; ancestor; ancestor = ancestor.parent) {
       if (/weapon|halo/i.test(ancestor.name) || classifyBone(canonicalBoneName(ancestor.name)) === 'face')
@@ -124,8 +166,22 @@ export function discoverCloth(
     }
     if (blocked) continue
     for (const root of hub.children) {
+      const sleeve = sleevePanelKey.test(canonicalBoneName(root.name))
+      // A wrist or intermediary attachment is not a general cloth hub.
+      if (!bodyHub && (!sleeve || eligible(hub))) continue
       if (!eligible(root) || torsoAccessoryAnchor(root, rest, pelvisX)) continue
-      if (!decorative.test(root.name) && !(skin?.hasSkin && root.children.some(eligible))) continue
+      if (kimonoHemKey.test(canonicalBoneName(root.name))) {
+        if (key !== 'bip001_pelvis') continue
+        if (!skin?.skinned.has(root)) {
+          // A weightless pivot can carry actual weighted skirt panels (Junko).
+          // Keep the pivot fixed and start the simulation at each panel.
+          for (const panel of root.children) {
+            if (skin?.hasSkin && eligible(panel) && /skirt|dress|hem/i.test(panel.name))
+              visit(panel, panel, hub, 'skirt', 0, false)
+          }
+          continue
+        }
+      } else if (!sleeve && !decorative.test(root.name) && !(skin?.hasSkin && root.children.some(eligible))) continue
       const bangs = /hair.*_f(?:_|\d|$)|bang|front/i.test(root.name)
       visit(root, root, hub, undefined, 0, bangs)
     }

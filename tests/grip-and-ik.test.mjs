@@ -465,7 +465,7 @@ test('selected borrowed weapons drive the support hand before the cloth pass', (
   // Configure the solver first; capture the wrist at the actual cloth entry point.
   e.sample(0, 0, rig)
   let beforeCloth
-  t.mock.method(e.spring, 'solveStaticCollisions', () => {
+  t.mock.method(e.spring, 'step', () => {
     beforeCloth = pos(a.hands.l)
   })
   for (const [source, display] of [

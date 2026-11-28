@@ -48,7 +48,7 @@ export function defaultRig(): RigSettings {
       legs: 'motionB',
       weapon: 'motionB',
     },
-    spring: { enabled: false, stiffness: 0.5, damping: 0.15, gravity: 1.8, wind: 0, windAngle: 0 },
+    spring: { enabled: true, stiffness: 0.55, damping: 0.55, gravity: 1.8, wind: 0, windAngle: 0 },
     expressionSync: true,
     mirror: false,
     secondaryClip: '',
@@ -91,12 +91,18 @@ export function weaponSourceKey(key: string, mirror: boolean, available: Readonl
   if (available.has(dual)) return dual
   if (!left && available.has('bip001_weapon')) return 'bip001_weapon'
 }
+// Both spellings occur in the game rigs. The unweighted "_Point" markers
+// and the anatomical calf joints are separate nodes.
+export const kimonoHemKey = /^(?:bone|boen)_calfpoint_[fb]$/
+export const sleevePanelKey = /(?:^|_)(?:[lr]?sleeves?|handsleeve|sodetake|sode|yukata)(?=_|\d|$)/
+export const bodyTailKey = /^(?:(?:bone|bip001)_(?:hip_|cat_?|dog_?)?tail|tail_bone)(?:_?(?:\d+|[lr]|end|nub))*$/
 export function classifyBone(key: string): BodyPart | 'secondary' {
   if (/weapon/.test(key)) return 'weapon'
   if (/(?:^|_)(?:eye|eyes|eyelid|eyelash|eyebrow|eyeblow|eyeball|cheek|mouth|brow)(?:_|\d|$)/.test(key))
     return 'face'
   if (/^(?:bip001_(?:head|neck)|haloroot)$/.test(key)) return 'head'
   if (/^bip001(?:_(?:spine\d*|pelvis))?$/.test(key)) return 'torso'
+  if (kimonoHemKey.test(key) || sleevePanelKey.test(key) || bodyTailKey.test(key)) return 'secondary'
   if (/thigh|calf|foot|toe|knee|_hip/.test(key)) return 'legs'
   if (/clavicle|upperarm|forearm|hand|finger|wrist|deltoid|elbow/.test(key)) {
     if (key.split('_').includes('l')) return 'leftArm'

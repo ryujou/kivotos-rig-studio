@@ -1,4 +1,5 @@
 import {
+  AnimationClip,
   DetachedBindMode,
   Euler,
   MathUtils,
@@ -8,13 +9,14 @@ import {
   Quaternion,
   SkinnedMesh,
   Vector3,
-  type AnimationClip,
 } from 'three'
 import { clipSequence, sampleSequence, sequenceDuration } from './AnimationUtils'
 import {
   canonicalBoneName,
+  bodyTailKey,
   classifyBone,
   defaultRig,
+  kimonoHemKey,
   mirrorBoneName,
   weaponKey,
   weaponSourceKey,
@@ -23,6 +25,7 @@ import {
 } from './RigDefinition'
 import { bodyColliders, ColliderGroup, type BodyColliders, type DynamicCapsule } from './BodyColliders'
 import { SpringBoneSolver } from './SpringBoneSolver'
+import { rootGarment } from './ClothTopology'
 import { torsoAccessoryAnchor } from './TorsoAccessories'
 import { decomposeRigTransform, rigBones, type StudioModel } from './ModelLoader'
 
@@ -42,6 +45,7 @@ import {
   type Side,
   type WeaponGrip,
 } from './GripCalibration'
+import { KimonoDrape } from './KimonoDrape'
 import { SkirtClearance } from './SkirtClearance'
 import { ClipPlayer } from './ClipPlayer'
 export { ClipPlayer } from './ClipPlayer'
@@ -285,6 +289,8 @@ export class RetargetEngine {
   private readonly driverTwists = new Map<string, NonNullable<ReturnType<typeof twistBinding>>>()
   private readonly upperArms: Joint[]
   private readonly torsoAccessories: { node: Object3D; anchor: Object3D; relativeToAnchor: Matrix4 }[] = []
+  private readonly garmentBase = new Map<Object3D, { position: Vector3; rotation: Quaternion; scale: Vector3 }>()
+  private tailMotion?: { player: ClipPlayer; clip: AnimationClip }
   readonly colliders: BodyColliders
   private readonly weaponTargets: Joint[]
   private readonly collapsedMeshes = new Set<Mesh>()
@@ -371,8 +377,59 @@ export class RetargetEngine {
     this.upperArms = this.targets.filter((j) => /^bip001_[lr]_upperarm$/.test(j.key))
     this.colliders = bodyColliders(actorModel)
     if (actorModel !== driverModel) {
-      const pelvisX = this.byKey.get('bip001_pelvis')?.rest.restWorldPos.x
+      const pelvis = this.byKey.get('bip001_pelvis')
+      const pelvisX = pelvis?.rest.restWorldPos.x
+      const detached = new Set(this.targets.filter(j => pelvis && rootGarment(j.node, pelvis.node)).map(j => j.node))
+      const families = new Set([...detached].map(n => /skirt|dress|coat/i.exec(n.name)![0].toLowerCase()))
+      const calibrated = this.targets.filter(j => {
+        if (bodyTailKey.test(j.key)) {
+          for (let n = j.node.parent; n; n = n.parent) {
+            if (n === pelvis?.node) return true
+            if (!bodyTailKey.test(canonicalBoneName(n.name))) return false
+          }
+        }
+        return j.group === 'secondary' && [...families].some(f => j.key.startsWith('bone_' + f))
+      })
+      // A straight bind tail or a flattened train can extend below the feet.
+      // Read the actor's authored resting shape without changing its live pose.
+      const idle = ['Cafe_Idle', 'Formation_Idle', 'Normal_Idle'].map(name =>
+        actorModel.animations.find(c => c.name === name)).find(Boolean)
+      const reference = idle && calibrated.length ? new SampledRig(actorModel, true) : undefined
+      if (reference && idle) {
+        reference.sample(idle, 0)
+        const tailRoot = new Object3D()
+        const tailNames = new Set<string>()
+        for (const { node } of calibrated) {
+          const ref = reference.byName.get(node.name)!.node
+          const base = new Object3D()
+          base.name = node.name
+          base.position.copy(ref.position)
+          base.quaternion.copy(ref.quaternion)
+          base.scale.copy(ref.scale)
+          this.garmentBase.set(node, { position: base.position, rotation: base.quaternion, scale: base.scale })
+          if (bodyTailKey.test(canonicalBoneName(node.name))) {
+            tailNames.add(node.name)
+            tailRoot.add(base)
+          }
+        }
+        const tracks = idle.tracks.filter(track => tailNames.has(track.name.slice(0, track.name.lastIndexOf('.'))))
+        if (tracks.length && idle.duration > 0) {
+          this.tailMotion = { player: new ClipPlayer(tailRoot), clip: new AnimationClip('Tail', idle.duration, tracks) }
+        }
+      }
       for (const { node, group, character } of this.targets) {
+        if (pelvis && detached.has(node)) {
+          const bind = actorModel.rest.get(node)!
+          const hip = pelvis.rest
+          const relativeToAnchor = new Matrix4()
+            .compose(hip.restWorldPos, hip.restWorldQuat, hip.restWorldScale).invert()
+            .multiply(this.frame.compose(bind.restWorldPos, bind.restWorldQuat, bind.restWorldScale))
+          if (reference) relativeToAnchor
+            .copy(reference.byKey.get('bip001_pelvis')!.node.matrixWorld).invert()
+            .multiply(reference.byName.get(node.name)!.node.matrixWorld)
+          this.torsoAccessories.push({ node, anchor: pelvis.node, relativeToAnchor })
+          continue
+        }
         if (!character || group !== 'secondary') continue
         const anchor = torsoAccessoryAnchor(node, actorModel.rest, pelvisX)
         if (!anchor) continue
@@ -386,6 +443,7 @@ export class RetargetEngine {
         }
         this.torsoAccessories.push({ node, anchor, relativeToAnchor })
       }
+      reference?.player.dispose()
     }
     for (const dst of this.targets) {
       const target = twistBinding(dst.key, this.byKey)
@@ -529,6 +587,7 @@ export class RetargetEngine {
     if (!keepSpring) this.spring.reset()
   }
 
+  private kimonoDrape?: KimonoDrape
   private skirtClearance?: SkirtClearance
 
   private resetArmHistory() {
@@ -559,6 +618,7 @@ export class RetargetEngine {
         override?.source ||
         override?.rotation ||
         override?.muted ||
+        (native && kimonoHemKey.test(j.key)) ||
         (!native && this.sourceJoint(j, rig, this.motion))
       )
         excluded.add(j.node)
@@ -578,6 +638,7 @@ export class RetargetEngine {
         rig.spring,
         this.colliders,
       )
+      this.kimonoDrape = native ? undefined : new KimonoDrape(this.actorModel, this.spring.particles, this.colliders)
     }
     this.spring.settings = rig.spring
     if (rig.spring.enabled !== this.lastRig?.spring.enabled || rig.antiClip !== this.lastRig?.antiClip)
@@ -614,6 +675,13 @@ export class RetargetEngine {
       this.startWindow,
     )
     this.motion.sample(at?.clip, at?.time ?? 0)
+    if (this.tailMotion) {
+      const { player, clip } = this.tailMotion
+      // Ping-pong also preserves continuity for idle tracks whose end keys
+      // differ. Absolute time gives identical preview, seek and export poses.
+      const phase = Math.max(0, time) % (2 * clip.duration)
+      player.sample(clip, Math.min(phase, 2 * clip.duration - phase))
+    }
     const native = this.actorModel === this.driverModel
     this.driverModel.syncSwitchVisibility(at?.clip)
     if (!native) this.actorModel.syncSwitchVisibility()
@@ -723,8 +791,10 @@ export class RetargetEngine {
       for (const g of this.heldProps) if (g.capsule) this.addCapsule(g.capsule, g.root.matrixWorld)
     }
     this.colliders.setDynamicCapsules(this.activeCapsules)
-    if (rig.spring.enabled) this.spring.step(this.clothDt)
-    else if (staticPass) this.spring.solveStaticCollisions(this.clothDt)
+    if (rig.spring.enabled) {
+      this.kimonoDrape?.apply(rig.spring.gravity)
+      this.spring.step(this.clothDt)
+    } else if (staticPass) this.spring.solveStaticCollisions(this.clothDt)
     if (!this.direct || rig.spring.enabled) this.actorModel.root.updateMatrixWorld(true)
     if (staticPass) {
       this.skirtClearance ??= new SkirtClearance(this.actorModel, this.spring, this.colliders)
@@ -1124,13 +1194,14 @@ export class RetargetEngine {
   private solveJoint(dst: Joint, rig: RigSettings) {
     const { node, rest, group } = dst
     const override = rig.overrides[node.name]
+    const garment = override ? undefined : this.garmentBase.get(node)
     // On a native rig, the mixer owns vehicle ancestors and their independent
     // visibility tracks. A character edit must not reset the turret or its props.
     if (!dst.character && !override) {
       if (this.actorModel !== this.driverModel) {
-        node.position.copy(rest.restLocalPos)
-        node.quaternion.copy(rest.restLocalQuat)
-        node.scale.copy(rest.restLocalScale)
+        node.position.copy(garment?.position ?? rest.restLocalPos)
+        node.quaternion.copy(garment?.rotation ?? rest.restLocalQuat)
+        node.scale.copy(garment?.scale ?? rest.restLocalScale)
         node.updateWorldMatrix(false, false)
       }
       return
@@ -1141,9 +1212,9 @@ export class RetargetEngine {
     // An explicit binding selects a Motion B bone even on an Actor A group.
     const rigSource = override?.source ? this.motion : source
     const src = this.sourceJoint(dst, rig, rigSource)
-    node.position.copy(rest.restLocalPos)
-    node.quaternion.copy(rest.restLocalQuat)
-    node.scale.copy(rest.restLocalScale)
+    node.position.copy(garment?.position ?? rest.restLocalPos)
+    node.quaternion.copy(garment?.rotation ?? rest.restLocalQuat)
+    node.scale.copy(garment?.scale ?? rest.restLocalScale)
     if (!override?.muted && mode !== 'rest' && (group !== 'face' || rig.expressionSync)) {
       if (src) {
         if (group === 'face') this.solveFace(dst, src, rig.mirror, rigSource.model === this.actorModel)
@@ -1379,6 +1450,7 @@ export class RetargetEngine {
     this.actorModel.setWeaponsCollapsed(false)
     if (this.nativeModified) this.motion.restoreNative()
     this.motion.player.dispose()
+    this.tailMotion?.player.dispose()
     this.secondary?.player.dispose()
     if (this.actorModel !== this.driverModel) {
       for (const mesh of this.driverModel.meshGroups.keys()) this.driverModel.setPartEnabled(mesh, true)

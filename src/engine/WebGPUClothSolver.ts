@@ -252,6 +252,8 @@ struct Contact { body: vec4f, ids: vec4u, weights: vec4f, plane: vec4f, receiver
 @group(0) @binding(1) var<storage,read> rows: array<Contact>;
 @group(0) @binding(2) var<storage,read> frames: array<Frame>;
 @group(0) @binding(3) var<storage,read_write> output: array<f32>;
+// First five aligned vectors of Params, including the stage floor and normal.
+@group(0) @binding(4) var<uniform> stageParams: array<vec4f, 5>;
 fn bodyOffset(i:u32) -> vec3f {
   let b = rows[i].body.xyz;
   let base = poses[i].curr;
@@ -272,6 +274,10 @@ fn surface_contacts(@builtin(global_invocation_id) gid: vec3u) {
     offset += clamp(row.receiver.x*max(0.0,row.plane.w-d),-row.receiver.z,row.receiver.z)*row.plane.xyz;
     let b=row.body.xyz;
     offset += b*max(0.0,1.0-dot(offset,b)/max(dot(b,b),1e-20));
+  }
+  if (row.body.w != 0.0) {
+    let up = stageParams[4].xyz;
+    offset += up * max(0.0, -dot(poses[i].skin + offset - stageParams[3].xyz, up));
   }
   let v=(frames[u32(row.receiver.y)].inverseWorld*vec4f(offset,0)).xyz;
   output[i*3u]=v.x; output[i*3u+1u]=v.y; output[i*3u+2u]=v.z;
@@ -423,7 +429,7 @@ export class WebGPUClothSolver {
         }
         const group = device.createBindGroup({
           layout: pipeline.getBindGroupLayout(0),
-          entries: [this.stateBuffer, buffer, this.frameBuffer, this.output].map((buffer, binding) => ({
+          entries: [this.stateBuffer, buffer, this.frameBuffer, this.output, this.paramBuffer].map((buffer, binding) => ({
             binding,
             resource: { buffer },
           })),

@@ -2,13 +2,14 @@ import { Matrix4, Quaternion, Vector3, type Object3D } from 'three'
 import { ColliderGroup, collisionMasks, type BodyColliders, type PointContact } from './BodyColliders'
 import { buildRings, discoverCloth, type ClothJoint, type RingEdge } from './ClothTopology'
 import type { RestTransform } from './ModelLoader'
-import type { SpringSettings } from './RigDefinition'
+import { canonicalBoneName, kimonoHemKey, type SpringSettings } from './RigDefinition'
 
 const h = 1 / 120
 const rad = Math.PI / 180
 const thickness = 0.004
 const panelMask = ColliderGroup.legs
 const response = {
+  tail: { wind: 0.2, damping: 1.25 },
   bangs: { wind: 0.45, damping: 1.2 },
   hair: { wind: 1, damping: 0.95 },
   cloth: { wind: 1.25, damping: 0.9 },
@@ -40,6 +41,7 @@ interface Particle extends ClothJoint {
   phaseOffset: number
   scale: number
   bindScale: number
+  kimonoHem: boolean
 }
 
 export class SpringBoneSolver {
@@ -114,6 +116,7 @@ export class SpringBoneSolver {
           : undefined
       return {
         ...joint,
+        kimonoHem: kimonoHemKey.test(canonicalBoneName(joint.bone.name)),
         hubPosition: new Vector3(),
         hubQuaternion: new Quaternion(),
         restOutwardLocal,
@@ -470,7 +473,7 @@ export class SpringBoneSolver {
     this.direction.subVectors(p.next, this.origin).normalize()
     if (this.direction.lengthSq() === 0) this.direction.copy(this.axis)
     this.turn.setFromUnitVectors(this.axis, this.direction)
-    let limit = p.material === 'wing' ? 30 : 45
+    let limit = p.material === 'wing' || p.material === 'tail' ? 30 : 45
     if (p.material === 'skirt' || p.bangs) {
       const inward = this.difference.subVectors(this.direction, this.axis).dot(this.radial) < 0
       if (p.bangs) limit = inward ? 7 : 19
@@ -481,6 +484,9 @@ export class SpringBoneSolver {
         limit = base + ((p.depth === 0 ? 76 : 80) - base) * t * t * (3 - 2 * t)
       }
     }
+    // These low pivots normally translate. Large rotations twist the panel
+    // around the shin while the rest of the same fabric stays bound to the leg.
+    if (p.kimonoHem) limit = Math.min(limit, 18)
     const angle = this.identity.angleTo(this.turn)
     if (angle > limit * rad) this.turn.slerp(this.identity, 1 - (limit * rad) / angle)
     p.next.copy(this.axis).applyQuaternion(this.turn).multiplyScalar(length).add(this.origin)

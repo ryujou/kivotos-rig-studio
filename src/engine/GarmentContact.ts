@@ -117,6 +117,8 @@ export class GarmentContact {
   private readonly thickness: number
   private readonly garmentFaces: ClothFace[]
   private readonly garmentNodes: number[]
+  private readonly floorNodes: number[] = []
+  private readonly floorOnly: number[] = []
 
   constructor(
     private readonly model: StudioModel,
@@ -149,6 +151,10 @@ export class GarmentContact {
     this.panelEdges = cloth.edges.filter((e) => !e.bending && garmentIds.has(e.a) && garmentIds.has(e.b))
     nodes.forEach((n, i) => {
       this.data[i * contactStride + 17] = n.meshIndex
+      if (n.mobility && [collisionMasks.skirt, collisionMasks.cloth, collisionMasks.tail].includes(n.materialMask)) {
+        this.floorNodes.push(i)
+        if (!garmentIds.has(i)) this.floorOnly.push(i)
+      }
     })
     this.pelvis = Array.from(model.rest.keys()).find((b) => canonicalBoneName(b.name) === 'bip001_pelvis')
     const rest = this.pelvis && model.rest.get(this.pelvis)
@@ -356,6 +362,16 @@ export class GarmentContact {
       this.hasPreviousSurface = true
     }
     this.hair.project(body, this.data, contactStride, dt)
+    // A tail tip or the edge of a train can touch the floor while its
+    // controlling bone is still above it. Project the posed surface as well.
+    for (const i of this.floorOnly) {
+      const at = i * contactStride
+      this.data.fill(0, at, at + 3)
+      if (!body) continue
+      const n = nodes[i], mesh = meshes[n.meshIndex].mesh
+      mesh.getVertexPosition(n.vertex, this.skin[i]).applyMatrix4(mesh.matrixWorld)
+    }
+    for (const i of this.floorNodes) this.data[i * contactStride + 3] = Number(body)
     return this.data
   }
 
@@ -551,6 +567,10 @@ export function surfaceOffset(packet: GarmentContact, i: number, out: Vector3) {
     const body = dp.fromArray(data, at),
       sq = body.lengthSq()
     if (sq > 0) out.addScaledVector(body, Math.max(0, 1 - out.dot(body) / sq))
+  }
+  if (data[at + 3]) {
+    const depth = packet.colliders.floorDepth(dp.copy(skin[i]).add(out), 0)
+    if (depth > 0) out.addScaledVector(packet.colliders.up, depth)
   }
   return out
 }

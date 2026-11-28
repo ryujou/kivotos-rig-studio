@@ -1,6 +1,7 @@
 import { Line3, Matrix3, Matrix4, Object3D, SkinnedMesh, Vector3 } from 'three'
 import { rigBones, type StudioModel } from './ModelLoader'
-import { canonicalBoneName, classifyBone } from './RigDefinition'
+import { canonicalBoneName, classifyBone, kimonoHemKey, sleevePanelKey } from './RigDefinition'
+import { sleeveSide } from './ClothTopology'
 
 const thigh = 4,
   calf = 32
@@ -16,6 +17,7 @@ export const ColliderGroup = {
 } as const
 const { head, torso, legs, arms, floor, weapon } = ColliderGroup
 export const collisionMasks = {
+  tail: torso | legs | floor,
   skirt: legs | floor,
   hair: head | torso | arms | floor | weapon,
   cloth: torso | arms | legs | floor,
@@ -87,6 +89,8 @@ function sampleBindVertices(model: StudioModel, weighted: Set<Object3D>) {
     if (!position || !skinIndex || !skinWeight) continue
     hasSkin = true
     const { bones } = mesh.skeleton
+    const hemPivots = bones.map((b) => kimonoHemKey.test(canonicalBoneName(b.name)))
+    const hasHems = hemPivots.includes(true)
     const matrices = bindSkinMatrices(model, mesh)
     for (let i = 0; i < position.count; i++) {
       let dominant = -1,
@@ -110,6 +114,17 @@ function sampleBindVertices(model: StudioModel, weighted: Set<Object3D>) {
       let points = samples.get(owner)
       if (!points) samples.set(owner, (points = []))
       points.push(blended.clone())
+      // At the kimono's lower seam a shin often carries the largest weight.
+      // Fit the actual panel edge as well, even where its pivot is secondary.
+      if (hasHems) {
+        for (let k = 0; k < skinWeight.itemSize; k++) {
+          const index = skinIndex.getComponent(i, k)
+          if (index === dominant || !hemPivots[index] || skinWeight.getComponent(i, k) < 0.15) continue
+          let panel = samples.get(bones[index])
+          if (!panel) samples.set(bones[index], (panel = []))
+          panel.push(blended.clone())
+        }
+      }
     }
   }
 
@@ -117,7 +132,7 @@ function sampleBindVertices(model: StudioModel, weighted: Set<Object3D>) {
 }
 
 // Fit in the original bind frame. Keep all positive skin influences for topology,
-// but only the dominant bone owns a vertex for the purposes of fitting a shape.
+// and fit each body shape from vertices dominated by that joint.
 export class BodyColliders {
   readonly shapes: Capsule[] = []
   private readonly bodyShapes: Shape[] = []
@@ -125,6 +140,7 @@ export class BodyColliders {
   readonly legSurface = new Map<Object3D, Vector3[]>()
   readonly skinProbes = new Map<Object3D, Vector3[]>()
   readonly leafTips = new Map<Object3D, Vector3>()
+  readonly hangingSleeveTips = new Map<Object3D, Vector3>()
   readonly skinned = new Set<Object3D>()
   readonly hasSkin: boolean
   readonly up = new Vector3(0, 1, 0)
@@ -183,6 +199,39 @@ export class BodyColliders {
         )
       }
       if (!parent || points.length < 4 || bone.children.some((child) => this.skinned.has(child))) continue
+      if (sleevePanelKey.test(canonicalBoneName(bone.name))) {
+        const side = sleeveSide(bone), fore = nodes.get('bip001_' + side + '_forearm'), hand = nodes.get('bip001_' + side + '_hand')
+        if (fore && hand) {
+          const elbow = model.rest.get(fore)!.restWorldPos
+          const axis = model.rest.get(hand)!.restWorldPos.clone().sub(elbow)
+          const length = axis.length()
+          axis.normalize()
+          const center = new Vector3()
+          for (const p of points) center.add(v.subVectors(p, elbow))
+          center.divideScalar(points.length)
+          center.addScaledVector(axis, -center.dot(axis))
+          // A cuff wraps around the arm. A loose single-bone sleeve has a
+          // weighted lobe predominantly on one side of the forearm.
+          if (length > 1e-6 && center.length() > 0.18 * length) {
+            center.normalize()
+            let high = -Infinity, low = Infinity
+            for (const p of points) {
+              const d = v.subVectors(p, elbow).dot(center)
+              high = Math.max(high, d); low = Math.min(low, d)
+            }
+            if (high > 0.6 * length && -low < 0.55 * high) {
+              const tip = new Vector3()
+              let count = 0
+              for (const p of points) if (v.subVectors(p, elbow).dot(center) >= high * 0.75) {
+                count++; tip.add(p)
+              }
+              tip.divideScalar(count).sub(bind.restWorldPos)
+              if (tip.dot(center) > 0.35 * length) this.hangingSleeveTips.set(bone,
+                tip.applyQuaternion(bind.restWorldQuat.clone().invert()).divide(bind.restWorldScale))
+            }
+          }
+        }
+      }
       const axis = v.subVectors(bind.restWorldPos, parent.restWorldPos)
       const incoming = axis.length()
       if (incoming < 1e-6) continue
@@ -192,7 +241,10 @@ export class BodyColliders {
         start = Math.floor(points.length * 0.75)
       for (let i = start; i < points.length; i++) distal.add(points[i])
       distal.divideScalar(points.length - start).sub(bind.restWorldPos)
-      if (distal.dot(axis) < incoming * 0.2) continue
+      // A hem pivot is near the seam but parented at the waist. Its real
+      // weighted tip can be much shorter than the incoming pelvis-to-shin link.
+      const minimum = kimonoHemKey.test(canonicalBoneName(bone.name)) ? 1e-5 : incoming * 0.2
+      if (distal.dot(axis) < minimum) continue
       distal.clampLength(0, 2.5 * incoming)
       if (
         Math.min(

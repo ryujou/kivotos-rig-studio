@@ -129,8 +129,11 @@ test('a sparse imported skirt resolves a leg through the middle of a face and pr
   }
   const axis = new Line3(v(0, 0, -0.15), v(0, 0, -0.1))
   const cap = { bindAxis: axis, bindRadius: 0.03, a: axis.start.clone(), b: axis.end.clone() }
+  let floor = -0.2
   const c = new GarmentContact({ root: pelvis, rest, bodyMeshes: [], hipRestHeight: 0.5 }, cloth, {
     legCapsules: [cap],
+    up: v(0, 1, 0),
+    floorDepth: p => floor - p.y,
     update() {},
   })
   c.prepare(true, 1)
@@ -140,6 +143,14 @@ test('a sparse imported skirt resolves a leg through the middle of a face and pr
   assert.ok(surfaceOffset(c, 0, v()).z > 0.02)
   assert.ok(surfaceOffset(c, 1, v()).z > 0.02)
   assert.equal(surfaceOffset(c, 2, v()).length(), 0)
+  floor = 0.1
+  c.prepare(true, 1)
+  for (const i of [0, 1]) {
+    const offset = surfaceOffset(c, i, v())
+    assert.ok(Math.abs(c.skin[i].y + offset.y - floor) < 1e-6)
+    assert.ok(offset.z > 0.02, 'the floor projection keeps the leg clearance')
+  }
+  assert.equal(surfaceOffset(c, 2, v()).length(), 0, 'waist stays pinned')
 })
 
 test('preview changes only self-contact work after consecutive one-second windows', () => {

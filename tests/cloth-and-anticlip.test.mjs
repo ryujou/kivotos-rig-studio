@@ -39,6 +39,9 @@ const world = (n) => n.getWorldPosition(V())
 
 function fixture({
   twists = false,
+  kimono = false,
+  alternateGarments = false,
+  trailingGarments = false,
   spine2 = false,
   neck = true,
   longTips = false,
@@ -117,6 +120,35 @@ function fixture({
       const helper = add(prefix + 'forearm_twist', fore)
       chain('bone_' + side.toUpperCase() + '_Sodetake_01', helper, [0, -0.03, 0.03], [0, -0.09, 0.04])
     }
+  }
+  if (kimono) {
+    for (const [name, z] of [['boen_Calfpoint_F', 0.12], ['bone_Calfpoint_B', -0.12]]) {
+      const panel = add(name, pelvis, 0, -0.28, z)
+      for (const x of [-0.03, 0.03]) {
+        for (const y of [-0.04, -0.03]) vertex(nodes.bip001_l_calf, world(panel).add(V(x, y, 0)), panel)
+      }
+      add(name + '_Point', pelvis, 0, -0.28, z)
+    }
+  }
+  if (trailingGarments) {
+    for (const foot of [nodes.bip001_l_foot, nodes.bip001_r_foot]) {
+      vertex(foot, world(foot).setY(0))
+    }
+    const tail = add('bone_tail_00', pelvis, 0, 0, -0.1)
+    const tip = add('bone_tail_01', tail, 0, -0.92, 0)
+    vertex(tip, world(tip))
+    chain('bone_dress_01', bip, [0.1, -0.05, -0.15], [0, -0.52, 0])
+  }
+  if (alternateGarments) {
+    const fore = nodes.bip001_l_forearm
+    const twist = add('Bone_L_ForeArm_Twist02', fore)
+    chain('bone_yukata_l_01', fore, [0, -0.06, 0], [0, 0, -0.09])
+    chain('bone_sleeve_l_01', twist, [0, -0.06, 0], [0, 0, -0.09])
+    chain('bone_sleeve_fitted_l', fore, [0, -0.04, 0], [0, -0.10, 0])
+    chain('bone_sleeve_cuff_l', fore, [0, -0.1, 0], [0, 0, 0.09])
+    const pivot = add('bone_Calfpoint_F', pelvis, 0, -0.13, 0.11)
+    chain('bone_skirtF_00', pivot, [0, 0, 0], [0, -0.1, 0])
+    add('bone_Calfpoint_F_Point', pelvis, 0, -0.13, 0.11)
   }
   // Put the poles between panels. Lift the left leg through the front-left panel.
   for (let i = 0; i < 8; i++) {
@@ -340,6 +372,72 @@ test('free-arm clearance preserves authored twist as a torso strap compensates f
     active ||= e.clearanceAngle.r > 0
   }
   assert.ok(active)
+})
+
+test('borrowed kimono follows gravity at the hem and sleeve without rotating the anatomical calf', (t) => {
+  const lean = new AnimationClip('Lean', 1, [anim('bip001_pelvis', V(0, 0, 1), Math.PI / 3)])
+  const a = fixture({ twists: true, kimono: true }), b = fixture({ clips: [lean] })
+  const e = new RetargetEngine(a.model, b.model), rig = defaultRig()
+  rig.antiClip = false
+  t.after(() => { e.dispose(); a.model.dispose(); b.model.dispose() })
+  e.setClip('Lean')
+  const hem = a.nodes.boen_Calfpoint_F, calf = a.nodes.bip001_l_calf
+  const sleeve = a.nodes.bone_L_Sodetake_01, cuff = sleeve.children[0]
+  const sleeveDrop = () => world(sleeve).y - world(cuff).y
+  e.sample(1, 0, { ...rig, spring: { ...rig.spring, enabled: false } })
+  const rigidHem = world(hem), rigidCalf = world(calf), rigidSleeve = sleeveDrop()
+  e.sample(1, 0, rig)
+  assert.ok(world(hem).y < rigidHem.y - 0.015)
+  near(world(calf).distanceTo(rigidCalf), 0)
+  assert.ok(sleeveDrop() > rigidSleeve + 0.01)
+  const panels = e.spring.particles.filter(p => p.kimonoHem)
+  assert.deepEqual(panels.map(p => p.bone.name).sort(), ['boen_Calfpoint_F', 'bone_Calfpoint_B'])
+  assert.ok(panels.every(p => p.material === 'skirt' && e.colliders.leafTips.has(p.bone)))
+  assert.ok(panels.every(p => p.tip.length() > 0.025 && p.tip.length() < 0.06))
+  e.sample(1, 0, { ...rig, overrides: { [hem.name]: { muted: true } } })
+  near(world(hem).distanceTo(rigidHem), 0)
+  e.sample(1, 0, rig)
+  const first = world(hem)
+  e.sample(1, 0, rig)
+  near(world(hem).distanceTo(first), 0)
+})
+
+test('borrowed motion drapes loose sleeve chains and finds panels below a weightless hem pivot', (t) => {
+  const a = fixture({ alternateGarments: true }), b = fixture({ clips: [swing] })
+  const e = new RetargetEngine(a.model, b.model), rig = defaultRig()
+  t.after(() => { e.dispose(); a.model.dispose(); b.model.dispose() })
+  e.setClip('Swing')
+  e.sample(0, 0, rig)
+  const roots = new Set(e.kimonoDrape.sleeves.map(p => p.chain.name))
+  assert.deepEqual(roots, new Set(['bone_yukata_l_01', 'bone_sleeve_l_01']))
+  const cloth = e.spring.particles
+  assert.ok(cloth.some(p => p.bone.name === 'bone_skirtF_00' && p.material === 'skirt'))
+  assert.ok(!cloth.some(p => /calfpoint/i.test(p.bone.name)))
+  for (const name of roots) {
+    const root = a.nodes[name]
+    assert.ok(world(root).y - world(root.children[0]).y > 0.035)
+  }
+})
+
+test('a sub-floor tail leaves the actor grounded while a detached train follows its own waist', (t) => {
+  const idle = new AnimationClip('Cafe_Idle', 1, [
+    new VectorKeyframeTrack('bone_tail_01.position', [0, 1], [0, -0.24, -0.15, 0, -0.12, -0.3]),
+  ])
+  const lean = new AnimationClip('Lean', 1, [anim('bip001_pelvis', V(0, 0, 1), 0.4)])
+  const a = fixture({ trailingGarments: true, clips: [idle] }), b = fixture({ clips: [lean] })
+  const engine = new RetargetEngine(a.model, b.model), rig = defaultRig()
+  t.after(() => { engine.dispose(); a.model.dispose(); b.model.dispose() })
+  rig.spring.enabled = false
+  rig.antiClip = false
+  near(a.model.restGroundOffset.y, 0)
+  const train = a.nodes.bone_dress_01, waist = a.nodes.bip001_pelvis
+  const waistToTrain = relative(train, waist)
+  engine.setClip('Lean')
+  for (const time of [0, 0.75, 0.25, 1]) {
+    engine.sample(time, 0, rig)
+    near(a.nodes.bone_tail_01.position.y, -0.24 + time * 0.12)
+    nearMatrix(relative(train, waist), waistToTrain)
+  }
 })
 
 test('rigid accessory skin is absent from spring particles and fine cloth while sleeves remain movable', (t) => {
@@ -590,6 +688,7 @@ for (const dynamic of [false, true])
       const engine = new RetargetEngine(actor, driver)
       engine.setClip('Lift')
       const rig = defaultRig()
+      rig.spring.enabled = false
       rig.spring.gravity = 0
       engine.sample(1, 0, { ...rig, antiClip: false })
       const solver = engine.spring
@@ -736,6 +835,7 @@ test('arm clearance rotates both complete arms about slot forward, native direct
   slot.add(model.root)
   const engine = new RetargetEngine(model),
     rig = defaultRig()
+  rig.spring.enabled = false
   engine.setClip('Native')
   const localX = (node) => slot.worldToLocal(world(node)).x
   engine.sample(1, 0, rig)
@@ -795,7 +895,9 @@ test('capture pre-roll advances cloth for a quarter second at the actual trim st
       Array.from({ length: 15 }, () => [1.75, 1 / 60, false, true]),
     )
     samples.length = 0
-    useStudioStore.setState({ slots })
+    useStudioStore.setState({
+      slots: [{ ...slot, rig: { ...slot.rig, spring: { ...slot.rig.spring, enabled: false } } }],
+    })
     SceneManager.prototype.resetCapturePose.call(scene, 1.75)
     assert.equal(samples.length, 0)
   } finally {
@@ -803,9 +905,37 @@ test('capture pre-roll advances cloth for a quarter second at the actual trim st
   }
 })
 
+test('a borrowed body turn drives unkeyed hair and clothing with the default rig', (t) => {
+  const turn = new AnimationClip('Turn', 1, [
+    new QuaternionKeyframeTrack('bip001_spine1.quaternion', [0, 0.2, 0.5], [
+      ...identity, ...Q(V(0, 0, 1), 0.75), ...identity,
+    ]),
+    anim('bip001_head', V(1), 0.65),
+  ])
+  const actor = fixture({ collisionLinks: true }), driver = fixture({ clips: [turn] })
+  const engine = new RetargetEngine(actor.model, driver.model)
+  t.after(() => { engine.dispose(); actor.model.dispose(); driver.model.dispose() })
+  engine.setClip('Turn')
+  const rig = defaultRig()
+  const bones = [actor.nodes.hair_long, actor.nodes.ribbon_long]
+  const sample = (settings) => {
+    engine.reset()
+    return Array.from({ length: 61 }, (_, i) => {
+      engine.sample(i / 60, i ? 1 / 60 : 0, settings)
+      return bones.map((bone) => bone.quaternion.clone())
+    })
+  }
+  const on = sample(rig)
+  const off = sample({ ...rig, spring: { ...rig.spring, enabled: false } })
+  for (const [index, bone] of bones.entries()) {
+    assert.ok(on.some((frame, i) => frame[index].angleTo(off[i][index]) > 0.01), bone.name)
+    assert.ok(on.some((frame) => frame[index].angleTo(on[0][index]) > 0.01), bone.name)
+  }
+})
+
 test('root tuning exposes physics sliders only with springs enabled in all four languages', () => {
   assert.equal(defaultRig().antiClip, true)
-  assert.equal(defaultRig().spring.enabled, false)
+  assert.equal(defaultRig().spring.enabled, true)
   for (const lang of languages) {
     assertAdjustInspector(lang, false)
     assertAdjustInspector(lang, true)

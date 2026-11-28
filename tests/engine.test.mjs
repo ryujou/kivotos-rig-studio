@@ -240,6 +240,26 @@ test('soft lighting shades an Eyering prop', () => {
   assert.equal(type, 'MeshLambertMaterial', 'Eyering matched /eye/i false positive and stayed unlit!')
 })
 
+test('combined Original skins keep their clothing and face visible when weapons are hidden', () => {
+  const root = new THREE.Group(), meshNames = new Map()
+  const primitive = (materialName, group) => {
+    const skin = new THREE.SkinnedMesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial())
+    skin.material.name = materialName
+    skin.geometry.setAttribute('position', new THREE.Float32BufferAttribute([], 3))
+    skin.bind(new THREE.Skeleton([]))
+    root.add(skin)
+    meshNames.set(skin, group)
+    return skin
+  }
+  const body = primitive('Mimori_Original_Body', 'Mimori_Original')
+  const face = primitive('Mimori_Original_Face', 'Mimori_Original')
+  const weapon = primitive('Mimori_Original_Weapon', 'Mimori_Original_Weapon')
+  const model = new StudioModel(root, [], 1, meshNames)
+  assert.deepEqual(model.bodyMeshes, [body, face])
+  assert.deepEqual(model.weaponMeshes, [weapon])
+  model.dispose()
+})
+
 test('Sena’s SM vehicle body hides as an actor prop during cross-character playback', () => {
   const root = new THREE.Group()
   const ambulance = new THREE.Group()

@@ -259,6 +259,11 @@ export class StudioModel {
       const summonName = [group, mesh.name].find((n) => /^SM\d+/i.test(n))
       const name = summonName || group || ancestry.join(' ')
       const namedWeapon = /weapon/i.test(name) && !/shield_weapon|weapon_can/i.test(name)
+      // A combined character skin can be named only "Original". Its individual
+      // primitives still carry the body, face and hair materials (Mimori).
+      const originalSkin = mesh instanceof SkinnedMesh && /_original$/i.test(name) &&
+        (Array.isArray(mesh.material) ? mesh.material : [mesh.material]).some(material =>
+          /_(?:body|face|hair|eyebrow|eyemouth)(?:_|$)/i.test(material.name))
       if (summonName) {
         // Vehicle skins can share character joints, including the weapon grip.
         if (namedWeapon) this.weaponMeshes.push(mesh)
@@ -268,7 +273,7 @@ export class StudioModel {
         this.restMouthWeights.set(mesh, this.restMorphWeights.get(mesh)!)
       } else if (/halo/i.test(name) || ancestry.some((n) => /halo/i.test(n))) {
         if (!this.haloNodes.includes(mesh)) this.haloNodes.push(mesh)
-      } else if (/body|(?:^|_)(?:face|hair|eyebrow|eyemouth)\d*(?:_|$)|^faceCH|^CH\d+(?:_Mesh)?$/i.test(name))
+      } else if (originalSkin || /body|(?:^|_)(?:face|hair|eyebrow|eyemouth)\d*(?:_|$)|^faceCH|^CH\d+(?:_Mesh)?$/i.test(name))
         this.bodyMeshes.push(mesh)
       else if (
         namedWeapon ||
@@ -292,7 +297,30 @@ export class StudioModel {
     const rootZ = charRoot ? this.rest.get(charRoot)!.restWorldPos.z : 0
     // The body's lowest bind-pose vertex can be on a vehicle seat above the stage floor.
     this.expandVisibleBounds(this.bounds, this.bodyMeshes)
-    const groundY = !this.bounds.isEmpty() && Math.abs(this.bounds.min.y) > 0.05 ? this.bounds.min.y : 0
+    let floor = this.bounds.min.y
+    // In some bind poses the straightened tail or train extends far below
+    // both shoes. Borrowed motion is grounded at the soles, including heels.
+    if (floor < -0.05) {
+      const point = new Vector3()
+      let sole = Infinity
+      for (const mesh of this.bodyMeshes) {
+        if (!(mesh instanceof SkinnedMesh)) continue
+        const feet = mesh.skeleton.bones.map(b => /^bip001_[lr]_(?:foot|toe\d*)$/.test(canonicalBoneName(b.name)))
+        if (!feet.includes(true)) continue
+        const { skinWeight, skinIndex } = mesh.geometry.attributes
+        if (!skinWeight || !skinIndex) continue
+        const indices = mesh.geometry.index
+        for (let j = 0; j < (indices?.count ?? skinWeight.count); j++) {
+          const i = indices?.getX(j) ?? j
+          let w = 0
+          for (let k = 0; k < skinWeight.itemSize; k++)
+            if (feet[skinIndex.getComponent(i, k)]) w += skinWeight.getComponent(i, k)
+          if (w >= 0.5) sole = Math.min(sole, mesh.getVertexPosition(i, point).applyMatrix4(mesh.matrixWorld).y)
+        }
+      }
+      if (Number.isFinite(sole) && sole - floor > 0.05) floor = sole
+    }
+    const groundY = Number.isFinite(floor) && Math.abs(floor) > 0.05 ? floor : 0
     this.restGroundOffset.set(
       hipPos && Math.abs(hipPos.x) > 0.05 ? hipPos.x : 0,
       groundY,
