@@ -25,6 +25,6 @@ declare module 'gifenc/dist/gifenc.esm.js' {
       },
     ): void
     finish(): void
-    bytes(): Uint8Array<ArrayBuffer>
+    bytesView(): Uint8Array<ArrayBuffer>
   }
 }

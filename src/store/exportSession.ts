@@ -13,6 +13,15 @@ export type ExportJob = { format: ExportFormat } & (
 export const useExportSession = create<{ job: ExportJob | null }>(() => ({ job: null }))
 let scene: SceneManager | null = null
 let active: AbortController | undefined
+export function exportReady(s: ReturnType<typeof useStudioStore.getState>) {
+  return (
+    s.timeline.duration > 0 &&
+    s.timeline.trimEnd > s.timeline.trimStart &&
+    s.slots.every((slot) => s.runtime[slot.id]?.status === 'ready') &&
+    s.props.every((prop) => !prop.visible || prop.status === 'ready')
+  )
+}
+
 export function bindExportScene(value: SceneManager | null) {
   if (!value) closeExport()
   scene = value

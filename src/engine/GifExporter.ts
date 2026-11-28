@@ -12,7 +12,7 @@ import {
   type WorkerReply,
 } from './exportSpec'
 import type { StageSettings } from '../store/useStudioStore'
-import { recordWebm, webmMime } from './webm'
+import { createWebmWriter } from './webm'
 
 export interface CaptureInput {
   settings: ExportSettings
@@ -87,7 +87,6 @@ export async function exportClip(
     !frames || viewport.width <= 0 || viewport.height <= 0 ||
     crop.width <= 0 || crop.height <= 0 || canvas.width <= 0 || canvas.height <= 0
   ) throw Error('stageUnavailable')
-  if (format === 'webm' && !webmMime()) throw Error('webmUnavailable')
   const native = settings.resolution === 'original'
   let { width, height } = outputSize(crop, settings.resolution, viewport.dpr)
   if (native) {
@@ -97,7 +96,7 @@ export async function exportClip(
   const output = document.createElement('canvas')
   output.width = width
   output.height = height
-  const ctx = output.getContext('2d', { willReadFrequently: format === 'gif' })
+  const ctx = output.getContext('2d', { willReadFrequently: format === 'gif' || format === 'webm' })
   if (!ctx) throw Error('exportFailed')
   ctx.imageSmoothingQuality = 'high'
   const background = settings.background === 'stage' ? stage.background : settings.background
@@ -166,7 +165,7 @@ export async function exportClip(
   }
   signal.addEventListener('abort', release, { once: true })
   let channel: ReturnType<typeof workerChannel> | undefined
-  let video: ReturnType<typeof recordWebm> | undefined
+  let video: Awaited<ReturnType<typeof createWebmWriter>> | undefined
   try {
     if (format !== 'webm') {
       const worker =
@@ -186,7 +185,7 @@ export async function exportClip(
           quality: settings.quality,
           loop: timeline.loop,
         })
-    } else video = recordWebm(output, fps)
+    } else video = await createWebmWriter(output, fps, transparent)
     if (format === 'gif' && settings.quality === 'balanced') {
       const samples = gifPaletteFrames(frames)
       for (let i = 0; i < samples; i++) {
@@ -200,6 +199,7 @@ export async function exportClip(
         await channel!.send({ type: 'sample', rgba }, [rgba.buffer])
       }
     }
+    signal.throwIfAborted()
     if (scene.resetCapturePoseAsync) await interruptible(scene.resetCapturePoseAsync(start), signal)
     else if (input.springs || (format === 'gif' && settings.quality === 'balanced')) scene.resetCapturePose(start)
     for (let i = 0; i < frames; i++) {

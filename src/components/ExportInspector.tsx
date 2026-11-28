@@ -1,9 +1,10 @@
+import { useEffect, useState } from 'react'
 import { Aperture, Download, Film, Focus, Images, Palette, Scan, Scissors } from 'lucide-react'
 import { useStudioStore, useText } from '../store/useStudioStore'
-import { startExport } from '../store/exportSession'
+import { exportReady, startExport } from '../store/exportSession'
 import { SelectBox, Toggle } from './shared'
 import { useOutputSpec } from './CropOverlay'
-import { webmMime } from '../engine/webm'
+import { canEncodeVp8, webmMime } from '../engine/webm'
 
 function Choices<T extends string | number>({
   label,
@@ -36,13 +37,20 @@ export function ExportInspector() {
     { settings, width, height, frames, start, end, duration, clipDuration, speed } = useOutputSpec()
   const set = useStudioStore((s) => s.setExport)
   const transparentStage = useStudioStore((s) => s.stage.background === 'transparent')
-  const ready =
-    useStudioStore(
-      (s) =>
-        s.slots.every((slot) => s.runtime[slot.id]?.status === 'ready') &&
-        s.props.every((prop) => !prop.visible || prop.status === 'ready'),
-    ) && frames > 0
-  const webm = !!webmMime()
+  const ready = useStudioStore(exportReady)
+  const recorder = !!webmMime()
+  const [vp8, setVp8] = useState(false)
+  useEffect(() => {
+    if (recorder) return
+    let active = true
+    void canEncodeVp8({ codec: 'vp8', width, height, latencyMode: 'quality' }).then((supported) => {
+      if (active) setVp8(supported)
+    })
+    return () => {
+      active = false
+    }
+  }, [recorder, width, height])
+  const webm = recorder || vp8
   return (
     <div className="inspector-scroll export-inspector">
       <section className="control-section">

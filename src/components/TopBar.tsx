@@ -2,7 +2,7 @@ import { ArrowLeftRight, BookOpen, Download, Moon, Plus, Sun, X } from 'lucide-r
 import { languages, type Language } from '../i18n'
 import { useStudioStore, useText } from '../store/useStudioStore'
 import { IconButton, SelectBox, useModelLabel } from './shared'
-import { startExport } from '../store/exportSession'
+import { exportReady, startExport } from '../store/exportSession'
 
 const langLabels: Record<Language, string> = { zh: '中', ja: '日', ko: '한', en: 'EN' }
 const fullNames = { zh: '简体中文', ja: '日本語', ko: '한국어', en: 'English' }
@@ -14,6 +14,7 @@ export function TopBar() {
     count = useStudioStore((s) => s.models.length)
   const theme = useStudioStore((s) => s.theme),
     language = useStudioStore((s) => s.language)
+  const ready = useStudioStore(exportReady)
   const actions = useStudioStore.getState()
   const label = useModelLabel()
   const slots = useStudioStore((s) => s.slots)
@@ -122,6 +123,7 @@ export function TopBar() {
         </IconButton>
         <button
           className="primary export-button"
+          disabled={ui.rightOpen && ui.right === 'export' && !ready}
           aria-label={t('exportGif')}
           title={t('exportGif')}
           onClick={() => {

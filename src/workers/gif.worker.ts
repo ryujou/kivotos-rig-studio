@@ -132,7 +132,7 @@ self.onmessage = ({ data }: MessageEvent<GifMessage>) => {
       else encode(pixels, options)
     } else if (data.type === 'finish' && gif && options && count === options.total && count > 0) {
       gif.finish()
-      const bytes = gif.bytes()
+      const bytes = gif.bytesView()
       reply({ type: 'done', bytes }, [bytes.buffer])
       gif = options = globalColors = samples = undefined
     } else throw Error('invalid_sequence')

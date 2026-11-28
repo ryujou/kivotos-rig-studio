@@ -137,6 +137,14 @@ test('export aspect ratios, sample counts and timing use the selected viewport a
   assert.equal(gifPaletteFrames(50), 5)
 })
 
+test('30 FPS export treats Float32 animation endpoints as frame boundaries', () => {
+  const frames = duration => clipTiming({ trimStart: 0, trimEnd: 1, duration, speed: 1 }, 30).frames
+  assert.equal(frames(Math.fround(310 / 30)), 310)
+  assert.equal(frames(1), 30)
+  assert.equal(frames(310 / 30 + .0001), 311)
+  assert.equal(frames(.000001), 1)
+})
+
 test('a zero-sized crop produces finite output dimensions', () => {
   const zeroOut = outputSize({ x: 0, y: 0, width: 0, height: 0 }, 512, 1)
   assert.ok(

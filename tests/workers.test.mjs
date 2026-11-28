@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { fixedRateWebm, recordWebm, webmMime } from '../src/engine/webm.ts'
+import { createWebmWriter, fixedRateWebm, recordWebm, webmMime } from '../src/engine/webm.ts'
 
 test('WebM recorder timestamps SimpleBlock and BlockGroup frames and releases its track', async (t) => {
   function u(v) {
@@ -81,6 +81,57 @@ test('WebM recorder timestamps SimpleBlock and BlockGroup frames and releases it
   assert.equal(track.frames, 2)
   assert.ok(track.stopped)
   assert.deepEqual(await video.arrayBuffer(), await fixedRateWebm(webm, 1000, 2).arrayBuffer())
+})
+
+test('offline WebM submits every frame and its alpha plane by timestamp and releases both encoders', async (t) => {
+  const encoders = [], frames = []
+  class Frame {
+    constructor(source, options) {
+      this.time = !options.format && options.timestamp === 4033333 ? 4033332 : options.timestamp
+      this.luma = options.format === 'I420' ? Array.from(source) : undefined
+      frames.push(this)
+    }
+    close() { this.closed = true }
+  }
+  class Encoder {
+    static async isConfigSupported() { return { supported: true } }
+    constructor({ output }) {
+      this.output = output
+      this.queue = []
+      this.state = 'unconfigured'
+      encoders.push(this)
+    }
+    configure() { this.state = 'configured' }
+    encode(frame, { keyFrame }) { this.queue.push([frame.time, keyFrame]) }
+    async flush() {
+      // Deliberately deliver each group out of order.
+      for (const [timestamp, key] of this.queue.reverse())
+        this.output({ timestamp, type: key ? 'key' : 'delta', byteLength: 1, copyTo: dst => { dst[0] = 42 } })
+      this.queue = []
+    }
+    close() { this.state = 'closed' }
+  }
+  t.mock.method(globalThis, 'setTimeout', () => { throw Error('offline export waited for wall time') })
+  const globals = { VideoFrame: Frame, VideoEncoder: Encoder }
+  for (const [name, value] of Object.entries(globals)) {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, name)
+    Object.defineProperty(globalThis, name, { value, configurable: true })
+    t.after(() => previous ? Object.defineProperty(globalThis, name, previous) : delete globalThis[name])
+  }
+  const rgba = Uint8ClampedArray.of(10, 20, 30, 0, 30, 40, 50, 128, 60, 70, 80, 255)
+  const canvas = { width: 3, height: 1, getContext: () => ({ getImageData: () => ({ data: rgba }) }) }
+  const writer = await createWebmWriter(canvas, 30, true)
+  for (let i = 0; i < 125; i++) await writer.frame()
+  await assert.rejects(writer.finish(126), /webmUnavailable/)
+  const blob = await writer.finish(125)
+  assert.equal(blob.type, 'video/webm')
+  assert.deepEqual(frames.filter(f => f.luma).map(f => f.time), Array.from({length:125}, (_, i) => Math.round(i * 1e6 / 30)))
+  assert.deepEqual(frames[1].luma, [0, 128, 255, 128, 128, 128, 128])
+  assert.ok(frames.every(f => f.closed))
+  const bytes = new Uint8Array(await blob.arrayBuffer())
+  assert.ok(fixedRateWebm(bytes, 30, 125).size)
+  writer.close()
+  assert.deepEqual(encoders.map(e => e.state), ['closed', 'closed'])
 })
 
 test('Workers: gif.worker (balanced/fast/crisp + transparent + errors) & png.worker', async () => {

@@ -48,7 +48,11 @@ export function clipTiming(t: ClipWindow, fps: number) {
   const start = t.trimStart * t.duration,
     end = t.trimEnd * t.duration
   const duration = (end - start) / t.speed
-  const frames = duration > 0 ? Math.max(1, Math.ceil(duration * fps - 1e-8)) : 0
+  // Imported animation key times are Float32. A rounded frame boundary (e.g.
+  // 310/30 seconds) should not append the endpoint as a duplicate final frame.
+  const exact = duration * fps
+  const tolerance = Math.min(0.001, Math.max(1, exact) * 2 ** -23)
+  const frames = duration > 0 ? Math.max(1, Math.ceil(exact - tolerance)) : 0
   return { start, end, duration, frames, step: t.speed / fps }
 }
 export interface ExportProgress {
