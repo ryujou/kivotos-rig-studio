@@ -1,5 +1,5 @@
 // gifenc 1.0.x ships JavaScript without declarations.
-declare module 'gifenc' {
+declare module 'gifenc/dist/gifenc.esm.js' {
   type Format = 'rgb565' | 'rgb444' | 'rgba4444'
   export function quantize(
     rgba: Uint8ClampedArray,

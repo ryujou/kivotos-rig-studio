@@ -22,7 +22,9 @@ export interface ClothEdge {
   restLength: number
   bending: boolean
 }
+export type ClothFace = [number, number, number]
 export interface FineClothMesh {
+  faces: ClothFace[]
   meshes: { mesh: SkinnedMesh; offset: BufferAttribute; vertexToNode: Uint32Array }[]
   nodes: Node[]
   // Four vec4s per node: local position/mobility, palette indices, weights, mesh/mask/floor.
@@ -31,6 +33,30 @@ export interface FineClothMesh {
   edges: ClothEdge[]
   colorBatches: { offset: number; count: number }[]
 }
+const morphDelta = new Vector3()
+const morphPoint = new Vector3()
+// A GLB can open with nonzero shape keys. Calibrate against the saved weights,
+// even when the solver is first created in the middle of a different animation.
+export function clothLocalPoint(
+  mesh: SkinnedMesh,
+  vertex: number,
+  weights: readonly number[] | undefined,
+  out: Vector3,
+) {
+  const { geometry } = mesh
+  out.fromBufferAttribute(geometry.attributes.position, vertex)
+  const shapes = geometry.morphAttributes.position
+  if (!shapes || !weights) return out
+  morphDelta.set(0, 0, 0)
+  for (let j = 0; j < shapes.length; j++) {
+    if (!weights[j]) continue
+    morphPoint.fromBufferAttribute(shapes[j], vertex)
+    if (!geometry.morphTargetsRelative) morphPoint.sub(out)
+    morphDelta.addScaledVector(morphPoint, weights[j])
+  }
+  return out.add(morphDelta)
+}
+
 const cache = new WeakMap<StudioModel, FineClothMesh | null>()
 
 function triangles(mesh: SkinnedMesh, ids: Uint32Array, visit: (a: number, b: number, c: number) => void) {
@@ -111,7 +137,7 @@ function build(model: StudioModel, colliders: BodyColliders): FineClothMesh | nu
         largest = 0,
         dominant = '',
         mask = 0
-      local.fromBufferAttribute(position, i)
+      clothLocalPoint(mesh, i, model.restMorphWeights.get(mesh), local)
       world.set(0, 0, 0)
       for (let k = 0; k < 4; k++) {
         const w = skinWeight.getComponent(i, k),
@@ -211,15 +237,28 @@ function build(model: StudioModel, colliders: BodyColliders): FineClothMesh | nu
     if (active) meshIndices.push(i)
     return active
   })
+  const faces: ClothFace[] = []
+  for (const { mesh, vertexToNode } of participating) {
+    triangles(mesh, vertexToNode, (a, b, c) => {
+      if (
+        a !== UNSIMULATED &&
+        b !== UNSIMULATED &&
+        c !== UNSIMULATED &&
+        (compact[a].mobility || compact[b].mobility || compact[c].mobility)
+      )
+        faces.push([a, b, c])
+    })
+  }
   const skinData = new ArrayBuffer(compact.length * 64)
   const floats = new Float32Array(skinData),
     uints = new Uint32Array(skinData)
   const bindClearance = new Float32Array(compact.length * MAX_CAPSULES)
   compact.forEach((n, i) => {
     n.meshIndex = meshIndices.indexOf(n.meshIndex)
-    const { position, skinIndex, skinWeight } = participating[n.meshIndex].mesh.geometry.attributes
+    const mesh = participating[n.meshIndex].mesh
+    const { skinIndex, skinWeight } = mesh.geometry.attributes
     const base = i * 16
-    local.fromBufferAttribute(position, n.vertex).toArray(floats, base)
+    clothLocalPoint(mesh, n.vertex, model.restMorphWeights.get(mesh), local).toArray(floats, base)
     floats[base + 3] = n.mobility
     for (let k = 0; k < 4; k++) {
       uints[base + 4 + k] = skinIndex.getComponent(n.vertex, k)
@@ -239,6 +278,7 @@ function build(model: StudioModel, colliders: BodyColliders): FineClothMesh | nu
   return {
     meshes: participating,
     nodes: compact,
+    faces,
     skinData,
     bindClearance,
     ...colorEdges(edges, compact.length),

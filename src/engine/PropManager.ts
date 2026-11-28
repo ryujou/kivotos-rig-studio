@@ -143,8 +143,37 @@ export class SlotProps {
   apply(slot: Slot, donor?: StudioModel, haloDonor?: StudioModel) {
     this.setEmbedded(slot.embedded)
     const weapon = this.applyWeapon(slot, donor)
+    if (
+      weapon &&
+      (weapon !== this.motion || this.editedGrips.length > 0 || slot.rig.mirror) &&
+      weapon.weaponMeshes.some((mesh) => /chain|tether/i.test(mesh.name))
+    ) {
+      this.placeTethers(weapon)
+    }
     this.applyHalo(slot, haloDonor)
     return weapon
+  }
+  private placeTethers(model: StudioModel) {
+    for (const link of gripProfile(model).tethers) {
+      const { bone, from, to, fraction } = link
+      // Interpolate in the link parent's frame. Each terminal link follows its
+      // own calibrated socket exactly, including the mesh beyond the last joint.
+      const parent = bone.parent!.matrixWorld
+      if (!from.matrixWorld.determinantAffine() || !to.matrixWorld.determinantAffine() || !parent.determinantAffine()) {
+        this.place(model, bone, this.target.makeScale(0, 0, 0))
+        continue
+      }
+      this.scratch.copy(parent).invert()
+      this.actorFrame.multiplyMatrices(this.scratch, from.matrixWorld).multiply(link.fromLocal)
+      this.sourceFrame.multiplyMatrices(this.scratch, to.matrixWorld).multiply(link.toLocal)
+      this.actorFrame.decompose(this.transform.position, this.transform.quaternion, this.transform.scale)
+      this.sourceFrame.decompose(this.position, this.rotation, this.scale)
+      this.transform.position.lerp(this.position, fraction)
+      this.transform.quaternion.slerp(this.rotation, fraction)
+      this.transform.scale.lerp(this.scale, fraction)
+      this.transform.updateMatrix()
+      this.place(model, bone, this.transform.matrix)
+    }
   }
   setEmbedded(embedded: Slot['embedded']) {
     for (const [name, meshes] of binding(this.motion).embeddedGroups)
@@ -328,7 +357,12 @@ export class SlotProps {
   }
   private place(model: StudioModel, node: Object3D, local: Matrix4) {
     if (!this.editedGrips.includes(node)) {
-      const saved = binding(model).originals.get(node)!
+      const originals = binding(model).originals
+      let saved = originals.get(node)
+      if (!saved) {
+        saved = { position: new Vector3(), rotation: new Quaternion(), scale: new Vector3() }
+        originals.set(node, saved)
+      }
       this.savedPoses.push(saved)
       saved.position.copy(node.position)
       saved.rotation.copy(node.quaternion)

@@ -14,10 +14,9 @@ Object.defineProperty(globalThis, 'localStorage', {
   },
 })
 
-// Match Vite's extensionless TypeScript imports and gifenc's browser ESM entry.
+// Match Vite's extensionless TypeScript imports.
 registerHooks({
   resolve(specifier, context, nextResolve) {
-    if (specifier === 'gifenc') return nextResolve('gifenc/dist/gifenc.esm.js', context)
     if (/^\.{1,2}\//.test(specifier) && !/\.\w+$/.test(specifier)) {
       for (const suffix of ['.ts', '/index.ts', '.tsx']) {
         const url = new URL(specifier + suffix, context.parentURL)

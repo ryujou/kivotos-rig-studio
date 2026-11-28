@@ -280,7 +280,8 @@ test('ground-scaled vehicle students use anatomical hip height while native and 
     const track = new THREE.VectorKeyframeTrack('Bip001.position', [0, 1], [
       ...localHip, localHip[0], localHip[1] + jump, localHip[2],
     ])
-    return new StudioModel(root, [makeClip('Jump', 1, [track])], 1)
+    const dismount = new THREE.VectorKeyframeTrack('character_root.position', [0, 1], [0, 0, 0, 0, 0, 0])
+    return new StudioModel(root, [makeClip('Jump', 1, [track]), makeClip('Dismount', 1, [dismount, track])], 1)
   }
   function near(actual, expected) {
     assert.ok(Math.abs(actual - expected) < 1e-6, `expected ${expected}, got ${actual}`)
@@ -323,6 +324,12 @@ test('ground-scaled vehicle students use anatomical hip height while native and 
   near(walker.root.getObjectByName('Bip001').getWorldPosition(new THREE.Vector3()).y, hipHeight + jump)
   passenger.sample(1, 0, { ...rig, rootMode: 'prop-locked' })
   near(walker.root.getObjectByName('Bip001').getWorldPosition(new THREE.Vector3()).distanceTo(seatedHip), 0)
+  passenger.setClip('Dismount')
+  for (const t of [0.5, 1, 0]) {
+    passenger.sample(t, 0, rig)
+    const hip = walker.root.getObjectByName('Bip001').getWorldPosition(new THREE.Vector3())
+    near(hip.y, hipHeight + jump * t)
+  }
   passenger.dispose()
   walker.dispose()
   rider.dispose()

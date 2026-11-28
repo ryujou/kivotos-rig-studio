@@ -26,6 +26,7 @@ import { buildFineClothMesh } from '../src/engine/ClothMeshBuilder.ts'
 import { StudioModel, rigBones } from '../src/engine/ModelLoader.ts'
 import { defaultRig } from '../src/engine/RigDefinition.ts'
 import { SpringBoneSolver } from '../src/engine/SpringBoneSolver.ts'
+import { SkirtClearance } from '../src/engine/SkirtClearance.ts'
 import { SceneManager } from '../src/engine/SceneManager.ts'
 import { useStudioStore } from '../src/store/useStudioStore.ts'
 import { RetargetEngine } from '../src/engine/RetargetEngine.ts'
@@ -459,6 +460,31 @@ test('authored waist overlap at tips and skin probes stays neutral, including a 
     rebuilt.restore()
   }
   model.dispose()
+})
+
+test('bind-fitted skirt contact follows the posed legs and is reversible on a reflected stage', (t) => {
+  const { model, nodes } = fixture({ tightWaist: true })
+  t.after(() => model.dispose())
+  const stage = new Group()
+  stage.rotation.z = 0.27
+  stage.scale.set(-1.3, 0.9, 1.1)
+  stage.add(model.root)
+  stage.updateMatrixWorld(true)
+  const solver = solverFor(model)
+  const fit = new SkirtClearance(model, solver, solver.colliders)
+  const panels = solver.particles.filter((p) => p.material === 'skirt').map((p) => p.bone)
+  const bind = panels.map((b) => b.position.clone())
+  fit.apply()
+  for (const [i, b] of panels.entries()) near(b.position.distanceTo(bind[i]), 0)
+  nodes.bip001_l_thigh.rotation.x = -1.2
+  stage.updateMatrixWorld(true)
+  fit.apply()
+  const posed = panels.map((b) => b.position.clone())
+  assert.ok(posed.some((p, i) => p.distanceTo(bind[i]) > 0.001))
+  fit.apply()
+  for (const [i, b] of panels.entries()) near(b.position.distanceTo(posed[i]), 0)
+  fit.restore()
+  for (const [i, b] of panels.entries()) near(b.position.distanceTo(bind[i]), 0)
 })
 
 test('skin probe deflection grows continuously through shallow thigh contact', () => {

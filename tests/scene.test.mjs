@@ -29,6 +29,7 @@ test('scene loads and recasts slots, binds sockets, frames the camera and restor
   }
   globalThis.window = { devicePixelRatio: 1 }
   const host = {
+    ownerDocument: new EventTarget(),
     clientWidth: 800,
     clientHeight: 600,
     appendChild() {},

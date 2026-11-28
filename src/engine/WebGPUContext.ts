@@ -54,7 +54,10 @@ interface GpuAdapterLike {
   requestDevice(): Promise<GpuDeviceLike>
 }
 export interface GpuApi {
-  requestAdapter(options: { powerPreference: 'high-performance' }): Promise<GpuAdapterLike | null>
+  requestAdapter(options: {
+    powerPreference?: 'high-performance'
+    featureLevel?: 'compatibility'
+  }): Promise<GpuAdapterLike | null>
 }
 export interface WebGPUState {
   status: 'probing' | 'webgpu' | 'fallback'
@@ -80,34 +83,59 @@ export async function detectWebGPU(gpuOverride?: GpuApi | null): Promise<WebGPUS
           ? (navigator as Navigator & { gpu?: GpuApi }).gpu
           : undefined
     if (!gpu?.requestAdapter) return fallback('unsupported')
-    const adapter = await gpu.requestAdapter({ powerPreference: 'high-performance' })
-    if (!adapter) return fallback('no-adapter')
-    const info = adapter.info
-    const names = [info?.description, info?.device, info?.architecture, info?.vendor].map((s) =>
-      s?.replace(/\s+/g, ' ').trim(),
-    )
-    if (
-      adapter.isFallbackAdapter ||
-      info?.isFallbackAdapter ||
-      /swiftshader|llvmpipe|lavapipe|software|basic render|warp/i.test(names.join(' '))
-    )
-      return fallback('software')
-    const device = await adapter.requestDevice()
-    const state: WebGPUState = {
-      status: 'webgpu',
-      label: (names.find(Boolean) || 'WebGPU').slice(0, 36).trimEnd(),
-      device,
+    // The cloth kernels fit the compatibility profile (64 threads, four storage
+    // buffers per stage). Mobile WebKit may prefer its default power policy;
+    // Android Chrome can also expose compute through its GLES compatibility adapter.
+    let lastReason = 'no-adapter'
+    for (const options of [
+      { powerPreference: 'high-performance' },
+      {},
+      { featureLevel: 'compatibility' },
+    ] as const) {
+      let adapter: GpuAdapterLike | null
+      try {
+        adapter = await gpu.requestAdapter(options)
+      } catch {
+        lastReason = 'request-failed'
+        continue
+      }
+      if (!adapter) continue
+      const info = adapter.info
+      const names = [info?.description, info?.device, info?.architecture, info?.vendor].map((s) =>
+        s?.replace(/\s+/g, ' ').trim(),
+      )
+      if (
+        adapter.isFallbackAdapter ||
+        info?.isFallbackAdapter ||
+        /swiftshader|llvmpipe|lavapipe|software|basic render|warp/i.test(names.join(' '))
+      ) {
+        lastReason = 'software'
+        continue
+      }
+      let device: GpuDeviceLike
+      try {
+        device = await adapter.requestDevice()
+      } catch {
+        lastReason = 'request-failed'
+        continue
+      }
+      const state: WebGPUState = {
+        status: 'webgpu',
+        label: (names.find(Boolean) || 'WebGPU').slice(0, 36).trimEnd(),
+        device,
+      }
+      const callbacks = new Set<() => void>()
+      listeners.set(state, callbacks)
+      const lost = () => {
+        Object.assign(state, fallback('device-lost'))
+        delete state.device
+        for (const callback of callbacks) callback()
+        callbacks.clear()
+      }
+      void device.lost.then(lost, lost)
+      return state
     }
-    const callbacks = new Set<() => void>()
-    listeners.set(state, callbacks)
-    const lost = () => {
-      Object.assign(state, fallback('device-lost'))
-      delete state.device
-      for (const callback of callbacks) callback()
-      callbacks.clear()
-    }
-    void device.lost.then(lost, lost)
-    return state
+    return fallback(lastReason)
   } catch {
     return fallback('request-failed')
   }

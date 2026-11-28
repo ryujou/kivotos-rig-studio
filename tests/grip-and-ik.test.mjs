@@ -262,6 +262,43 @@ test('native spread uses the captured authored palm and removing the edit restor
   assert.ok(a.weapons.r.matrixWorld.equals(bind))
 })
 
+test('a skinned tether follows both displayed sockets and interpolates by its authored link lengths', (t) => {
+  const links = []
+  const a = student(t, { dual: true, props({ root }) {
+    const from = pos(root.getObjectByName('Bip001_Weapon_r'))
+    const to = pos(root.getObjectByName('Bip001_Weapon_l'))
+    const delta = to.clone().sub(from)
+    links.push(bone(root, 'tether_start'))
+    links[0].position.copy(from)
+    links.push(bone(links[0], 'tether_middle'))
+    links[1].position.copy(delta).multiplyScalar(0.25)
+    links.push(bone(links[1], 'tether_end'))
+    links[2].position.copy(delta).multiplyScalar(0.75)
+    const geometry = new BufferGeometry()
+    geometry.setAttribute('position', new Float32BufferAttribute(links.flatMap((b) => pos(b).toArray()), 3))
+    geometry.setAttribute('skinIndex', new Uint16BufferAttribute(links.flatMap((_, i) => [i, 0, 0, 0]), 4))
+    geometry.setAttribute('skinWeight', new Float32BufferAttribute(links.flatMap(() => [1, 0, 0, 0]), 4))
+    const mesh = new SkinnedMesh(geometry, new MeshBasicMaterial())
+    mesh.name = 'Weapon_Tether'
+    root.add(mesh)
+    mesh.bind(new Skeleton(links))
+    return new Map([[mesh, mesh.name]])
+  } })
+  const props = new SlotProps(a.model, student(t).model)
+  const bind = links.map((b) => b.position.clone())
+  const profile = gripProfile(a.model)
+  assert.deepEqual(profile.tethers.map((link) => Math.round(100 * link.fraction)), [0, 25, 100])
+  a.weapons.r.position.y += 0.1
+  a.weapons.l.position.z -= 0.2
+  a.root.updateMatrixWorld(true)
+  props.apply(useStudioStore.getInitialState().slots[0])
+  near(pos(links[0]), pos(a.weapons.r))
+  near(pos(links[1]), pos(a.weapons.r).lerp(pos(a.weapons.l), 0.25))
+  near(pos(links[2]), pos(a.weapons.l))
+  props.restore()
+  for (const [i, b] of links.entries()) near(b.position, bind[i])
+})
+
 test('dual and single tracks map by handedness and collapse independently', (t) => {
   const a = student(t, { dual: true, height: 0.68, origin: -0.04 }),
     b = student(t)

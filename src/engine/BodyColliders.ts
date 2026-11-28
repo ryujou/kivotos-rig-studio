@@ -122,6 +122,7 @@ export class BodyColliders {
   readonly shapes: Capsule[] = []
   private readonly bodyShapes: Shape[] = []
   private readonly dynamicPool: Capsule[] = []
+  readonly legSurface = new Map<Object3D, Vector3[]>()
   readonly skinProbes = new Map<Object3D, Vector3[]>()
   readonly leafTips = new Map<Object3D, Vector3>()
   readonly skinned = new Set<Object3D>()
@@ -137,6 +138,17 @@ export class BodyColliders {
     const nodes = new Map(rigBones(model).map((b) => [canonicalBoneName(b.name), b]))
     const { samples, hasSkin } = sampleBindVertices(model, this.skinned)
     this.hasSkin = hasSkin
+    const legSpacing = Math.max(0.1, model.hipRestHeight) / 44
+    for (const [bone, points] of samples) {
+      if (!/^bip001_[lr]_(?:thigh|calf)(?:_twist)?$/.test(canonicalBoneName(bone.name))) continue
+      const occupied = new Set<string>()
+      this.legSurface.set(bone, points.filter((p) => {
+        const cell = [p.x, p.y, p.z].map((v) => Math.round(v / legSpacing)).join(',')
+        if (occupied.has(cell)) return false
+        occupied.add(cell)
+        return true
+      }))
+    }
     const v = new Vector3()
     // The final weighted joint frequently has no end bone. Sample the distal
     // quarter of its skin in bind space: a short extrapolation misses long hems.
@@ -374,6 +386,10 @@ export class BodyColliders {
 
   // Solvers can be rebuilt while a clip is posed. Only the immutable bind axes
   // are valid references for measuring how much clearance the artist left.
+  get legCapsules() {
+    return this.bodyShapes.filter(shape => (shape.group & ColliderGroup.legs) !== 0)
+  }
+
   bindRadii(point: Vector3, thickness: number, mask: number) {
     return Float64Array.from(this.bodyShapes, (s) => {
       if (!(s.group & mask)) return 0

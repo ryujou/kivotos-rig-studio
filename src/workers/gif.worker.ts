@@ -1,4 +1,4 @@
-import { applyPalette, GIFEncoder, quantize } from 'gifenc'
+import { applyPalette, GIFEncoder, quantize } from 'gifenc/dist/gifenc.esm.js'
 import { gifPaletteFrames, type GifInit, type GifMessage, type WorkerReply } from '../engine/exportSpec'
 
 const maxPalettePixels = 250_000

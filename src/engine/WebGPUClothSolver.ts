@@ -1,6 +1,13 @@
 import { Matrix3, Matrix4, Vector3, type Skeleton } from 'three'
 import { ColliderGroup, type BodyColliders } from './BodyColliders'
-import { MAX_CAPSULES, UNSIMULATED, vertexThickness, type FineClothMesh } from './ClothMeshBuilder'
+import {
+  clothLocalPoint,
+  MAX_CAPSULES,
+  UNSIMULATED,
+  vertexThickness,
+  type FineClothMesh,
+} from './ClothMeshBuilder'
+import { contactStride, type GarmentContact } from './GarmentContact'
 import type { StudioModel } from './ModelLoader'
 import type { SpringSettings } from './RigDefinition'
 import type { GpuBufferLike, GpuComputePipelineLike, GpuDeviceLike, GpuEncoderLike } from './WebGPUContext'
@@ -235,6 +242,42 @@ function pipelines(device: GpuDeviceLike) {
   }
   return result
 }
+// This pass reads a frozen snapshot of all particles. Each invocation owns
+// one output, including when adjacent faces share a hem or a UV seam.
+const surfaceShader = /* wgsl */ `
+struct Pose { skin: vec3f, prev: vec3f, curr: vec3f, pred: vec3f, contact: vec3f }
+struct Frame { bind: mat4x4f, invBind: mat4x4f, world: mat4x4f, inverseWorld: mat4x4f }
+struct Contact { body: vec4f, ids: vec4u, weights: vec4f, plane: vec4f, receiver: vec4f }
+@group(0) @binding(0) var<storage,read> poses: array<Pose>;
+@group(0) @binding(1) var<storage,read> rows: array<Contact>;
+@group(0) @binding(2) var<storage,read> frames: array<Frame>;
+@group(0) @binding(3) var<storage,read_write> output: array<f32>;
+fn bodyOffset(i:u32) -> vec3f {
+  let b = rows[i].body.xyz;
+  let base = poses[i].curr;
+  return base + b * max(0.0, 1.0-dot(base,b)/max(dot(b,b),1e-20));
+}
+@compute @workgroup_size(64)
+fn surface_contacts(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i >= arrayLength(&rows)) { return; }
+  let row = rows[i];
+  var offset = bodyOffset(i);
+  if (row.receiver.x != 0.0) {
+    var d = 0.0;
+    for (var j=0u; j<4u; j++) {
+      let k=row.ids[j];
+      d += row.weights[j]*dot(poses[k].skin+bodyOffset(k),row.plane.xyz);
+    }
+    offset += clamp(row.receiver.x*max(0.0,row.plane.w-d),-row.receiver.z,row.receiver.z)*row.plane.xyz;
+    let b=row.body.xyz;
+    offset += b*max(0.0,1.0-dot(offset,b)/max(dot(b,b),1e-20));
+  }
+  let v=(frames[u32(row.receiver.y)].inverseWorld*vec4f(offset,0)).xyz;
+  output[i*3u]=v.x; output[i*3u+1u]=v.y; output[i*3u+2u]=v.z;
+}
+`
+const surfacePipelines = new WeakMap<GpuDeviceLike, GpuComputePipelineLike>()
 interface Staging {
   buffer: GpuBufferLike
   pending?: Promise<void>
@@ -264,8 +307,16 @@ export class WebGPUClothSolver {
   private readonly capsuleBuffer
   private readonly boneBuffer
   private readonly frameBuffer
+  private readonly skinBuffer: GpuBufferLike
+  private readonly skinFloats: Float32Array
+  private readonly morphMeshes: { index: number; weights: number[]; nodes: number[] }[] = []
   private readonly stateBuffer
   private readonly output
+  private surfacePass?: {
+    pipeline: GpuComputePipelineLike
+    group: ReturnType<GpuDeviceLike['createBindGroup']>
+    buffer: GpuBufferLike
+  }
   private readonly outputBytes: number
   private initialized = false
   private hasOffsets = false
@@ -283,6 +334,7 @@ export class WebGPUClothSolver {
     private readonly colliders: BodyColliders,
     private readonly cloth: FineClothMesh,
     private readonly onFailure?: () => void,
+    readonly surface?: GarmentContact,
   ) {
     const { meshes, nodes, edges, colorBatches } = cloth
     this.outputBytes = nodes.length * 12
@@ -334,9 +386,19 @@ export class WebGPUClothSolver {
       this.frameBuffer = make('cloth mesh frames', this.frames.byteLength, storage)
       this.capsuleBuffer = make('cloth capsules', this.caps.byteLength, storage)
       this.output = make('cloth offsets', this.outputBytes, STORAGE | COPY_SRC | COPY_DST)
+      this.skinBuffer = make('cloth skin', skin.byteLength, storage, skin)
+      this.skinFloats = new Float32Array(skin.buffer)
+      meshes.forEach(({ mesh }, index) => {
+        if (mesh.geometry.morphAttributes.position?.length)
+          this.morphMeshes.push({
+            index,
+            weights: [...(model.restMorphWeights.get(mesh) ?? [])],
+            nodes: nodes.flatMap((n, i) => (n.meshIndex === index ? [i] : [])),
+          })
+      })
       const buffers = [
         this.paramBuffer,
-        make('cloth skin', skin.byteLength, storage, skin),
+        this.skinBuffer,
         this.stateBuffer,
         this.boneBuffer,
         this.frameBuffer,
@@ -346,6 +408,28 @@ export class WebGPUClothSolver {
         make('cloth clearance', cloth.bindClearance.byteLength, storage, cloth.bindClearance),
         this.output,
       ]
+      if (surface) {
+        const buffer = make('garment contacts', nodes.length * contactStride * 4, storage)
+        let pipeline = surfacePipelines.get(device)
+        if (!pipeline) {
+          pipeline = device.createComputePipeline({
+            layout: 'auto',
+            compute: {
+              module: device.createShaderModule({ code: surfaceShader }),
+              entryPoint: 'surface_contacts',
+            },
+          })
+          surfacePipelines.set(device, pipeline)
+        }
+        const group = device.createBindGroup({
+          layout: pipeline.getBindGroupLayout(0),
+          entries: [this.stateBuffer, buffer, this.frameBuffer, this.output].map((buffer, binding) => ({
+            binding,
+            resource: { buffer },
+          })),
+        })
+        this.surfacePass = { pipeline, group, buffer }
+      }
       const group = (
         kernel: Kernel,
         bindings: number[],
@@ -430,6 +514,21 @@ export class WebGPUClothSolver {
         .toArray(this.frames, i * 64 + 48)
     }
     const queue = this.device.queue
+    let morphChanged = false
+    for (const state of this.morphMeshes) {
+      const mesh = meshes[state.index].mesh,
+        weights = mesh.morphTargetInfluences ?? []
+      if (weights.length === state.weights.length && weights.every((w, i) => w === state.weights[i])) continue
+      state.weights = weights.slice()
+      for (const i of state.nodes) {
+        clothLocalPoint(mesh, this.cloth.nodes[i].vertex, weights, this.point).toArray(
+          this.skinFloats,
+          i * 16,
+        )
+      }
+      morphChanged = true
+    }
+    if (morphChanged) queue.writeBuffer(this.skinBuffer, 0, this.skinFloats)
     for (const [skeleton, palette] of this.palettes) {
       skeleton.update()
       // Three can pad/reallocate boneMatrices when WebGL creates its bone texture.
@@ -505,6 +604,11 @@ export class WebGPUClothSolver {
       pass.setBindGroup(0, this.groups.finalize)
       pass.dispatchWorkgroups(blocks)
     }
+    if (this.surfacePass) {
+      pass.setPipeline(this.surfacePass.pipeline)
+      pass.setBindGroup(0, this.surfacePass.group)
+      pass.dispatchWorkgroups(blocks)
+    }
     pass.end()
     this.sequence++
     this.needsCopy = !slot
@@ -575,6 +679,11 @@ export class WebGPUClothSolver {
     }
   }
 
+  prepareSurface(body: boolean, stride: number, dt = 0) {
+    if (this.surfacePass && this.surface)
+      this.device.queue.writeBuffer(this.surfacePass.buffer, 0, this.surface.prepare(body, stride, dt))
+  }
+
   dispatch(settings: SpringSettings, dt: number, dynamicMode: boolean) {
     if (this.disposed) return
     void this.submit(
@@ -594,6 +703,7 @@ export class WebGPUClothSolver {
   }
 
   reseed() {
+    this.surface?.reset()
     this.generation++
     this.needsCopy = this.initialized = false
     this.phase = 0
@@ -619,9 +729,11 @@ export class WebGPUClothSolver {
     const initialized = this.initialized,
       dynamic = this.lastDynamic,
       phase = this.phase
+    const restoreSurface = this.surface?.checkpoint()
     const hasOffsets = this.hasOffsets
     const visible = hasOffsets ? this.cloth.meshes.map((m) => m.offset.array.slice()) : []
     const restoreOffsets = () => {
+      restoreSurface?.()
       this.hasOffsets = hasOffsets
       visible.forEach((values, i) => {
         const { offset } = this.cloth.meshes[i]
@@ -629,10 +741,11 @@ export class WebGPUClothSolver {
         offset.needsUpdate = true
       })
     }
-    if (!initialized) return () => {
-      this.reset()
-      restoreOffsets()
-    }
+    if (!initialized)
+      return () => {
+        this.reset()
+        restoreOffsets()
+      }
     const stateBytes = this.cloth.nodes.length * 80
     const unpublished = this.scattered < this.sequence
     const frames = unpublished ? this.frames.slice() : undefined

@@ -28,10 +28,7 @@ import { languages } from '../src/i18n/index.ts'
 
 function adapter(fields) {
   return {
-    requestAdapter: async (options) => {
-      assert.deepEqual(options, { powerPreference: 'high-performance' })
-      return fields
-    },
+    requestAdapter: async () => fields,
   }
 }
 
@@ -72,6 +69,36 @@ test('hardware detection sanitizes labels, caches one probe, and publishes devic
   assert.equal(requests, 1)
   resetWebGPUCache()
   assert.notEqual(getWebGPU(), first)
+})
+
+test('a mobile compatibility adapter can supply cloth compute after the core requests fail', async () => {
+  const attempts = []
+  const state = await detectWebGPU({
+    async requestAdapter(options) {
+      attempts.push(options)
+      return options.featureLevel === 'compatibility' ? {
+        info: { vendor: 'ARM' }, requestDevice: async () => ({ lost: new Promise(() => {}) }),
+      } : null
+    },
+  })
+  assert.equal(state.status, 'webgpu')
+  assert.deepEqual(attempts, [{ powerPreference: 'high-performance' }, {}, { featureLevel: 'compatibility' }])
+})
+
+test('a system-selected hardware device is tried when the high-performance adapter fails', async () => {
+  const attempts = []
+  const device = { lost: new Promise(() => {}) }
+  const state = await detectWebGPU({
+    async requestAdapter(options) {
+      attempts.push(options)
+      return { requestDevice: async () => {
+        if (options.powerPreference) throw Error('device unavailable')
+        return device
+      } }
+    },
+  })
+  assert.equal(state.device, device)
+  assert.deepEqual(attempts, [{ powerPreference: 'high-performance' }, {}])
 })
 
 test('unavailable, software and failed adapters fall back before allocating compute resources', async () => {
@@ -452,6 +479,26 @@ test('cloth error scopes trigger fallback and report any GPU message', async (t)
   }
 })
 
+test('cloth calibration uses the imported shape key and GPU skinning follows subsequent morphs', (t) => {
+  const { model, colliders, left } = fixture(t)
+  const geometry=left.geometry, pos=geometry.attributes.position
+  geometry.morphTargetsRelative=true
+  geometry.morphAttributes.position=[new Float32BufferAttribute(Array.from({length:pos.count*3},(_,i)=>i%3===0?.04:0),3)]
+  model.restMorphWeights.set(left,[.25])
+  left.morphTargetInfluences=[.75]
+  const cloth=buildFineClothMesh(model,colliders), id=cloth.meshes[0].vertexToNode[1]
+  const expected=(weight)=>pos.getX(1)+weight*.04
+  assert.ok(Math.abs(new Float32Array(cloth.skinData)[id*16]-expected(.25))<1e-6)
+  const device=mockDevice(), solver=new WebGPUClothSolver(device,model,colliders,cloth)
+  const localX=()=>new Float32Array(device.buffers.find(b=>b.label==='cloth skin').bytes.buffer)[id*16]
+  solver.dispatch(defaultRig().spring,0,false)
+  assert.ok(Math.abs(localX()-expected(.75))<1e-6)
+  left.morphTargetInfluences[0]=0
+  solver.dispatch(defaultRig().spring,0,false)
+  assert.ok(Math.abs(localX()-expected(0))<1e-6)
+  solver.dispose()
+})
+
 test('compute queues use color batches and triple-buffered readback, drain deterministically, and discard stale frames', async (t) => {
   const { model, colliders, left, right } = fixture(t)
   const cloth = buildFineClothMesh(model, colliders),
@@ -609,7 +656,7 @@ test('scene capture publishes GPU results before drawing and cannot draw after i
     .getState()
     .setSlotRig(slot.id, { gpuCloth: true, spring: { ...slot.rig.spring, enabled: true } })
   const warmup = scene.resetCapturePoseAsync(0.25)
-  for (let i = 1; i <= 15; i++) {
+  for (let i = 1; i <= 30; i++) {
     await tick()
     assert.equal(device.maps.length, i + 1)
     device.maps[i].resolve()
@@ -921,7 +968,13 @@ test('scene loop rollover preserves the fine mesh while seek, placement, clip an
   useStudioStore.setState({ slots: [slot], timeline: { ...initial.timeline, playing: true, loop: true } })
   t.after(() => useStudioStore.setState(initial, true))
   const events = []
-  const engine = { actorModel: {}, driverModel: {}, duration: 1, setClip() {}, sample() {}, reset() {} }
+  const boneResets = []
+  const timesteps = []
+  const engine = {
+    actorModel: {}, driverModel: {}, duration: 1, setClip() {},
+    sample(_time, dt) { timesteps.push(dt) },
+    reset(keepSpring) { boneResets.push(keepSpring) },
+  }
   const entry = { engine, gpuCloth: { reset: () => events.push('reset'), reseed: () => events.push('reseed') } }
   const scene = Object.assign(Object.create(SceneManager.prototype), {
     capturing: true, slots: new Map([[slot.id, entry]]), props: { sync() {} },
@@ -939,6 +992,8 @@ test('scene loop rollover preserves the fine mesh while seek, placement, clip an
   sample(0.03, true)
   scene.samplePose(0.01, 1 / 60, true, true, 'capture')
   assert.deepEqual(events, ['reset', 'reseed', 'reseed', 'reset', 'reset', 'reset', 'reset'])
+  assert.deepEqual(boneResets, [false, true, true, false, false, false, false])
+  assert.deepEqual(timesteps.slice(0, 6), [0, 1 / 60, 1 / 60, 0, 0, 0])
 })
 
 test('fine cloth has no independent wind oscillation on a stationary posed skeleton', async (t) => {

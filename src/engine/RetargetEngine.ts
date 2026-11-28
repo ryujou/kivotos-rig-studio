@@ -42,6 +42,7 @@ import {
   type Side,
   type WeaponGrip,
 } from './GripCalibration'
+import { SkirtClearance } from './SkirtClearance'
 import { ClipPlayer } from './ClipPlayer'
 export { ClipPlayer } from './ClipPlayer'
 
@@ -130,6 +131,9 @@ class SampledRig {
   readonly root: Object3D
   readonly player: ClipPlayer
   private readonly inverseStage = new Matrix4()
+  private readonly carrier?: Object3D
+  private readonly dismounted = new WeakMap<AnimationClip, boolean>()
+  onFoot = false
 
   constructor(
     readonly model: StudioModel,
@@ -167,7 +171,27 @@ class SampledRig {
     this.byKey = new Map(this.joints.map((j) => [j.key, j]))
     this.byName = new Map(this.joints.map((j) => [j.node.name, j]))
     this.player = new ClipPlayer(this.root)
+    if (model.restGroundOffset.y > 0.05)
+      this.carrier = this.root.getObjectByProperty('name', 'character_root')
   }
+
+  sample(clip: AnimationClip | undefined, time: number) {
+    if (this.carrier && clip) {
+      let onFoot = this.dismounted.get(clip)
+      if (onFoot === undefined) {
+        // Vehicle rigs can author a whole on-foot clip in stage coordinates.
+        // Read its reference frame once, independently of the first requested seek.
+        this.player.sample(clip, 0)
+        const position = this.carrier.getWorldPosition(new Vector3())
+        this.root.parent?.worldToLocal(position)
+        onFoot = Math.abs(position.y) < this.model.restGroundOffset.y * 0.5
+        this.dismounted.set(clip, onFoot)
+      }
+      this.onFoot = onFoot
+    } else this.onFoot = false
+    this.player.sample(clip, time)
+  }
+
   capture() {
     const stage = this.root.parent
     if (stage) this.inverseStage.copy(stage.matrixWorld).invert()
@@ -490,17 +514,22 @@ export class RetargetEngine {
         this.actorModel.root.updateWorldMatrix(true, true)
         if (this.lastRig) this.anchorTorsoAccessories(this.lastRig)
       }
+      this.skirtClearance?.restore()
       resumeSpring()
+      if (this.lastRig?.antiClip && this.actorModel !== this.driverModel) this.skirtClearance?.apply()
     }
   }
-  reset() {
+  reset(keepSpring = false) {
+    this.skirtClearance?.restore()
     this.clothPending = false
     this.activeCapsules.length = 0
     this.colliders.setDynamicCapsules(this.activeCapsules)
     this.restoreProps()
     this.resetArmHistory()
-    this.spring.reset()
+    if (!keepSpring) this.spring.reset()
   }
+
+  private skirtClearance?: SkirtClearance
 
   private resetArmHistory() {
     for (const side of sides) {
@@ -540,6 +569,7 @@ export class RetargetEngine {
       [...excluded].some((node) => !this.springExclusions.has(node))
     ) {
       this.spring.reset()
+      this.skirtClearance = undefined
       this.springExclusions = excluded
       this.spring = new SpringBoneSolver(
         this.targets.map((j) => j.node),
@@ -570,6 +600,7 @@ export class RetargetEngine {
     this.clothDt = Number.isFinite(dt) ? dt : 0
     this.groundedContact.l = this.groundedContact.r = false
     this.restoreProps()
+    this.skirtClearance?.restore()
     this.spring.restore()
     if (this.nativeModified) {
       this.motion.restoreNative()
@@ -582,7 +613,7 @@ export class RetargetEngine {
       loop && duration && time > duration ? time % duration : time,
       this.startWindow,
     )
-    this.motion.player.sample(at?.clip, at?.time ?? 0)
+    this.motion.sample(at?.clip, at?.time ?? 0)
     const native = this.actorModel === this.driverModel
     this.driverModel.syncSwitchVisibility(at?.clip)
     if (!native) this.actorModel.syncSwitchVisibility()
@@ -614,7 +645,7 @@ export class RetargetEngine {
             ? time % clip.duration
             : Math.min(time, clip.duration)
           : 0
-        this.secondary.player.sample(clip, actorTime)
+        this.secondary.sample(clip, actorTime)
         this.secondary.capture()
       }
       const root = this.actorModel.root
@@ -695,6 +726,10 @@ export class RetargetEngine {
     if (rig.spring.enabled) this.spring.step(this.clothDt)
     else if (staticPass) this.spring.solveStaticCollisions(this.clothDt)
     if (!this.direct || rig.spring.enabled) this.actorModel.root.updateMatrixWorld(true)
+    if (staticPass) {
+      this.skirtClearance ??= new SkirtClearance(this.actorModel, this.spring, this.colliders)
+      this.skirtClearance.apply()
+    }
   }
 
   private addCapsule(capsule: GripCapsule, world: Matrix4) {
@@ -1250,7 +1285,7 @@ export class RetargetEngine {
     const validParentRotation = decomposeRigTransform(this.parent, this.pos, this.parentQ, this.scale)
     // Pickup clips shrink the turret. Its matrix can still map positions at that scale.
     if (key === 'bip001' && (validParentRotation || this.parent.determinantAffine() !== 0))
-      this.solveRoot(dst, src, source.model.hipRestHeight, rig)
+      this.solveRoot(dst, src, source, rig)
     if (!validParentRotation) return
     if (weaponKey.test(key)) {
       this.weaponLocal.copy(src.matrix)
@@ -1286,9 +1321,11 @@ export class RetargetEngine {
       this.delta.slerp(this.offsetQ.copy(joint.rot).multiply(joint.inverseRest).normalize(), weight)
   }
 
-  private solveRoot(dst: Joint, src: Joint, height: number, rig: RigSettings) {
+  private solveRoot(dst: Joint, src: Joint, source: SampledRig, rig: RigSettings) {
     if (rig.rootMode === 'ground-scaled') {
+      const height = source.model.hipRestHeight
       this.pos.subVectors(src.pos, src.rest.restWorldPos)
+      if (source.onFoot && this.actorModel !== source.model) this.pos.add(source.model.restGroundOffset)
       if (rig.mirror) this.pos.x *= -1
       this.pos
         .multiplyScalar(Math.abs(height) > 1e-6 ? this.actorModel.hipRestHeight / height : 1)

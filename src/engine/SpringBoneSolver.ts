@@ -359,16 +359,6 @@ export class SpringBoneSolver {
       }
     }
     for (const p of this.particles) {
-      if (slewDt > 0 && !p.attachment) {
-        // Short links can turn tens of degrees for millimetres of correction.
-        // Bound the local correction after projection, then commit the actual
-        // tip in parent-first order so Verlet history stays on the skeleton.
-        const rate = p.material === 'skirt' ? 360 : 420
-        p.swing.copy(p.priorSwing.rotateTowards(p.swing, rate * rad * slewDt))
-        p.bone.quaternion.copy(p.swing).multiply(p.base).normalize()
-        p.bone.updateWorldMatrix(true, false)
-        p.next.copy(p.tip).applyMatrix4(p.bone.matrixWorld)
-      }
       if (this.colliders && this.colliders.floorDepth(p.next, thickness * p.scale) > 1e-7) {
         this.frame(p)
         this.project(p)
@@ -376,6 +366,20 @@ export class SpringBoneSolver {
       this.supportFloorContact(p)
     }
     for (const p of this.particles) {
+      // Floor sharing can rotate a parent after its own contact pass. Limit the final
+      // pose, parent first, and keep the integration history at the tip we actually drew.
+      if (slewDt > 0 && !p.attachment) {
+        const rate = p.material === 'skirt' ? 360 : 420
+        p.swing.copy(this.turn.copy(p.priorSwing).rotateTowards(p.swing, rate * rad * slewDt))
+        p.bone.quaternion.copy(p.swing).multiply(p.base).normalize()
+      }
+      p.bone.updateWorldMatrix(true, false)
+      p.next.copy(p.tip).applyMatrix4(p.bone.matrixWorld)
+      if (slewDt > 0 && !p.attachment && this.colliders && this.colliders.floorDepth(p.next, 0) > 1e-7) {
+        this.origin.setFromMatrixPosition(p.bone.matrixWorld)
+        this.colliders.resolvePoint(p.next, 0, ColliderGroup.floor, undefined, this.origin)
+        this.applyTip(p)
+      }
       const velocity = this.difference.subVectors(p.next, p.current)
       if (p.contact.lengthSq() > 1e-12) {
         p.contact.normalize()
@@ -550,6 +554,10 @@ export class SpringBoneSolver {
         this.constrainCone(p, length)
       }
     }
+    this.applyTip(p)
+  }
+
+  private applyTip(p: Particle) {
     // Convert directions into the actual parent frame, including reflected BA
     // limbs. Extracting a world quaternion here loses negative bind scales.
     this.inverse.copy(p.bone.parent!.matrixWorld).invert()

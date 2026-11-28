@@ -45,7 +45,59 @@ export interface PropGroup {
   directSkin?: boolean
   hostBoneKey?: string
 }
+interface TetherJoint {
+  bone: Object3D
+  from: Object3D
+  to: Object3D
+  fromLocal: Matrix4
+  toLocal: Matrix4
+  fraction: number
+}
+
+function weaponTethers(model: StudioModel, weapons: Map<string, WeaponGrip>) {
+  const result: TetherJoint[] = []
+  const left = weapons.get('bip001_weapon_l')?.node
+  const right = weapons.get('bip001_weapon_r')?.node
+  if (!left || !right || !left.matrixWorld.determinant() || !right.matrixWorld.determinant()) return result
+  const seen = new Set<Object3D>()
+  for (const mesh of model.weaponMeshes) {
+    if (!(mesh instanceof SkinnedMesh) || !/chain|tether/i.test(mesh.name)) continue
+    const links = new Set(mesh.skeleton.bones.filter(b => /chain|tether/i.test(b.name)))
+    const first = [...links].find(b => !links.has(b.parent as typeof b))
+    if (!first || seen.has(first)) continue
+    const ordered = [first]
+    for (let bone = first; ; ) {
+      const children = bone.children.filter(child => links.has(child as typeof bone))
+      if (children.length !== 1) break
+      bone = children[0] as typeof bone
+      ordered.push(bone)
+    }
+    if (ordered.length !== links.size || ordered.length < 2) continue
+    seen.add(first)
+    const positions = ordered.map((bone) => bone.getWorldPosition(new Vector3()))
+    const distances = [0]
+    for (let i = 1; i < positions.length; i++)
+      distances.push(distances[i - 1] + positions[i].distanceTo(positions[i - 1]))
+    const length = distances[distances.length - 1]
+    if (length < 1e-8) continue
+    const start = positions[0], end = positions[positions.length - 1]
+    const l = left.getWorldPosition(new Vector3()), r = right.getWorldPosition(new Vector3())
+    const leftFirst = start.distanceTo(l) + end.distanceTo(r) < start.distanceTo(r) + end.distanceTo(l)
+    const from = leftFirst ? left : right, to = leftFirst ? right : left
+    const inverseFrom = from.matrixWorld.clone().invert(), inverseTo = to.matrixWorld.clone().invert()
+    for (const [i, bone] of ordered.entries()) {
+      result.push({
+        bone, from, to, fraction: distances[i] / length,
+        fromLocal: inverseFrom.clone().multiply(bone.matrixWorld),
+        toLocal: inverseTo.clone().multiply(bone.matrixWorld),
+      })
+    }
+  }
+  return result
+}
+
 export interface GripProfile {
+  tethers: TetherJoint[]
   weapons: Map<string, WeaponGrip>
   props: PropGroup[]
 }
@@ -358,6 +410,8 @@ function collectWeapons(model: StudioModel, nodes: Map<string, Object3D>, stageI
     }
   }
   for (const mesh of model.weaponMeshes) {
+    if (weapons.size > 1 && /chain|tether/i.test(mesh.name) && mesh instanceof SkinnedMesh &&
+      mesh.skeleton.bones.some(b => /chain|tether/i.test(b.name))) continue
     const rigid = owner(mesh.parent)
     const owners =
       mesh instanceof SkinnedMesh ? new Map(mesh.skeleton.bones.map((b) => [b, owner(b)])) : undefined
@@ -480,6 +534,7 @@ export function gripProfile(model: StudioModel): GripProfile {
         }
       }
     }
+    const tethers = weaponTethers(model, weapons)
     for (const group of props) {
       if (group.vertices.length) continue
       // Switch-only props can be absent from every holding pose. Try authored
@@ -516,7 +571,7 @@ export function gripProfile(model: StudioModel): GripProfile {
         group.liveSurface = { parts, vertices: parts.flatMap(part => part.points) }
       }
     }
-    const profile = { weapons, props }
+    const profile = { weapons, props, tethers }
     profiles.set(model, profile)
     return profile
   } finally {
